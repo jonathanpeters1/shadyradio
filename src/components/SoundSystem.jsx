@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react'
 import SpeakerCell from './SpeakerCell'
 import SFParticleField from './SFParticleField'
 import SFCamera from './SFCamera'
-import SFHeroSphere from './SFHeroSphere'
 import ShadyStage from './ShadyStage'
 import ShadyProps from './ShadyProps'
 import './SoundSystem.css'
@@ -13,12 +12,12 @@ const GENRES = [
   { name: 'Deep House',               slug: 'deep-house' },
   { name: 'Tech House',               slug: 'tech-house' },
   { name: "Jackin' House",            slug: 'jackin-house' },
-  { name: 'Melodic House & Tech…',    slug: 'melodic-house-techno' },
+  { name: 'Melodic House & Tech',     slug: 'melodic-house-techno' },
   { name: 'Indie Dance',              slug: 'indie-dance' },
-  { name: 'Techno Peak Time Dri…',   slug: 'techno-peak' },
-  { name: 'Techno Raw Deep Hypn…',   slug: 'techno-raw' },
+  { name: 'Techno Peak',              slug: 'techno-peak' },
+  { name: 'Techno Raw',               slug: 'techno-raw' },
   { name: 'Hard Techno',              slug: 'hard-techno' },
-  { name: 'Minimal / Deep Tech',      slug: 'minimal-deep-tech' },
+  { name: 'Minimal Deep Tech',        slug: 'minimal-deep-tech' },
   { name: 'Nu Disco',                 slug: 'nu-disco' },
   { name: 'JP Sets',                  slug: 'jp-sets' },
   { name: 'JP Classics',              slug: 'jp-classics' },
@@ -26,13 +25,39 @@ const GENRES = [
   { name: 'Soulful Funk & Disco',     slug: 'soul-funk-disco' },
 ]
 
+// Radio Browser API tag per genre
+const GENRE_TAGS = {
+  'house':                'house',
+  'afro-house':           'afro house',
+  'deep-house':           'deep house',
+  'tech-house':           'tech house',
+  'jackin-house':         'jackin house',
+  'melodic-house-techno': 'melodic techno',
+  'indie-dance':          'indie dance',
+  'techno-peak':          'techno',
+  'techno-raw':           'techno',
+  'hard-techno':          'hard techno',
+  'minimal-deep-tech':    'minimal techno',
+  'nu-disco':             'nu disco',
+  'jp-sets':              'house',
+  'jp-classics':          'soulful house',
+  'amapiano':             'amapiano',
+  'soul-funk-disco':      'funk',
+}
+
+const VOCAL_SLUGS = new Set([
+  'house','afro-house','jackin-house','indie-dance',
+  'nu-disco','jp-sets','jp-classics','amapiano','soul-funk-disco'
+])
+
 export default function SoundSystem() {
-  const [active, setActive]         = useState(null)
-  const [isPlaying, setIsPlaying]   = useState(false)
-  const [bass, setBass]             = useState(0)
-  const [treble, setTreble]         = useState(0)
-  const [bands, setBands]           = useState(() => new Array(16).fill(0))
-  const [mixMode, setMixMode]       = useState('radio')
+  const [active, setActive]           = useState(null)
+  const [isPlaying, setIsPlaying]     = useState(false)
+  const [loadingAudio, setLoadingAudio] = useState(false)
+  const [bass, setBass]               = useState(0)
+  const [treble, setTreble]           = useState(0)
+  const [bands, setBands]             = useState(() => new Array(16).fill(0))
+  const [mixMode, setMixMode]         = useState('radio')
   const [shadyInput, setShadyInput]   = useState('')
   const [shadyReply, setShadyReply]   = useState('')
   const [shadyBusy, setShadyBusy]     = useState(false)
@@ -43,38 +68,41 @@ export default function SoundSystem() {
   const [gridMode, setGridMode]       = useState(false)
   const [openBox, setOpenBox]         = useState(null)
   const [fxMode, setFxMode]           = useState(false)
-  const wsRef       = useRef(null)
-  const analyserRef = useRef(null)
-  const mouthRafRef = useRef(0)
-  const canvasAreaRef = useRef(null)
 
-  // WebSocket bridge to native audio engine (ws://localhost:8080)
-  // Falls back to simulated bass so the UI still looks alive
+  const wsRef           = useRef(null)
+  const mouthRafRef     = useRef(0)
+  const canvasAreaRef   = useRef(null)
+  const audioRef        = useRef(null)      // current HTMLAudioElement
+  const audioCtxRef     = useRef(null)      // shared AudioContext
+  const audioAnalyserRef= useRef(null)      // AnalyserNode
+  const audioRafRef     = useRef(0)         // RAF for analyser loop
+  const realAudioRef    = useRef(false)     // true when real stream is live
+
+  // ── sim loop (fallback when no real stream) ─────────────────────────────
   useEffect(() => {
-    let ws = null, retry = null, simRaf = 0, simT = 0, connected = false
+    let ws = null, retry = null, simRaf = 0, simT = 0, wsConnected = false
 
     function startSim() {
-      if (connected) return
+      if (wsConnected) return
       const tick = () => {
         simT += 0.016
-        setBass(b => {
-          if (!isPlaying) return 0
-          return Math.max(0, Math.sin(simT * 2.1) * 0.45 + Math.sin(simT * 5.3) * 0.15 + 0.28)
-        })
-        // 16-band frequency simulation — each speaker gets its own frequency slice
-        setBands(() => {
-          if (!isPlaying) return new Array(16).fill(0)
-          return Array.from({ length: 16 }, (_, i) => {
-            // logarithmic spread: low bands at i=0, highs at i=15
-            const fBase = 0.9 + Math.pow(i / 15, 1.4) * 5.5
-            const fHarm = fBase * (1.7 + (i % 3) * 0.4)
-            // sharp transient peaks + sustain
-            const raw = Math.sin(simT * fBase + i * 0.55) * 0.48
-                      + Math.sin(simT * fHarm) * 0.22
-                      + Math.max(0, Math.sin(simT * 2.1)) * (i < 4 ? 0.35 : 0.12) // kick hits bass bands hard
-            return Math.max(0, Math.min(1, raw + 0.28))
+        if (!realAudioRef.current) {
+          setBass(() => {
+            if (!isPlaying) return 0
+            return Math.max(0, Math.sin(simT * 2.1) * 0.45 + Math.sin(simT * 5.3) * 0.15 + 0.28)
           })
-        })
+          setBands(() => {
+            if (!isPlaying) return new Array(16).fill(0)
+            return Array.from({ length: 16 }, (_, i) => {
+              const fBase = 0.9 + Math.pow(i / 15, 1.4) * 5.5
+              const fHarm = fBase * (1.7 + (i % 3) * 0.4)
+              const raw = Math.sin(simT * fBase + i * 0.55) * 0.48
+                        + Math.sin(simT * fHarm) * 0.22
+                        + Math.max(0, Math.sin(simT * 2.1)) * (i < 4 ? 0.35 : 0.12)
+              return Math.max(0, Math.min(1, raw + 0.28))
+            })
+          })
+        }
         simRaf = requestAnimationFrame(tick)
       }
       simRaf = requestAnimationFrame(tick)
@@ -84,8 +112,9 @@ export default function SoundSystem() {
       try {
         ws = new WebSocket('ws://localhost:8080')
         wsRef.current = ws
-        ws.onopen = () => { connected = true; cancelAnimationFrame(simRaf) }
+        ws.onopen = () => { wsConnected = true; cancelAnimationFrame(simRaf) }
         ws.onmessage = (e) => {
+          if (realAudioRef.current) return
           const raw = e.data
           if (raw.startsWith('METER:')) {
             const vals = raw.slice(7).trim().split(/\s+/).map(Number)
@@ -93,25 +122,15 @@ export default function SoundSystem() {
               setBass(vals[0] ?? 0)
               setTreble(vals.slice(8).reduce((a, v) => a + v, 0) / 8)
             }
-          } else {
-            try {
-              const msg = JSON.parse(raw)
-              if (msg.type === 'meter' && Array.isArray(msg.values)) {
-                setBass(msg.values[0] ?? 0)
-                setTreble(msg.values.slice(8).reduce((a, v) => a + v, 0) / 8)
-              }
-            } catch {}
           }
         }
-        ws.onclose = () => { connected = false; wsRef.current = null; startSim(); retry = setTimeout(connect, 2500) }
+        ws.onclose = () => { wsConnected = false; wsRef.current = null; startSim(); retry = setTimeout(connect, 2500) }
         ws.onerror = () => ws?.close()
-      } catch {
-        startSim()
-      }
+      } catch { startSim() }
     }
 
     connect()
-    startSim() // start sim immediately; connect() cancels it if WS opens
+    startSim()
 
     return () => {
       if (retry) clearTimeout(retry)
@@ -120,23 +139,154 @@ export default function SoundSystem() {
     }
   }, [])
 
-  // Pause sim when nothing is playing
-  useEffect(() => { if (!isPlaying) setBass(0) }, [isPlaying])
+  useEffect(() => { if (!isPlaying && !realAudioRef.current) setBass(0) }, [isPlaying])
 
-  function tapGenre(slug) {
-    if (active === slug) {
-      setActive(null); setIsPlaying(false)
-    } else {
-      setActive(slug); setIsPlaying(true)
+  // ── audio engine ─────────────────────────────────────────────────────────
+  function stopAudio() {
+    realAudioRef.current = false
+    cancelAnimationFrame(audioRafRef.current)
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.src = ''
+      audioRef.current = null
+    }
+    audioAnalyserRef.current = null
+    setBass(0); setTreble(0); setBands(new Array(16).fill(0))
+  }
+
+  async function fetchStreamUrls(slug) {
+    const tag = GENRE_TAGS[slug] || 'house'
+    const url = `https://de1.api.radio-browser.info/json/stations/bytag/${encodeURIComponent(tag)}?limit=30&hidebroken=true&order=clickcount&is_https=false`
+    const res = await fetch(url, { headers: { 'User-Agent': 'ShadyRadio/1.0' } })
+    const stations = await res.json()
+    return stations.map(s => s.url_resolved || s.url).filter(Boolean)
+  }
+
+  async function playGenre(slug) {
+    stopAudio()
+    setLoadingAudio(true)
+
+    try {
+      const urls = await fetchStreamUrls(slug)
+
+      // lazy-create AudioContext (must happen after user gesture)
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      }
+      const actx = audioCtxRef.current
+      if (actx.state === 'suspended') await actx.resume()
+
+      for (const streamUrl of urls.slice(0, 8)) {
+        try {
+          const audio = new Audio()
+          audio.crossOrigin = 'anonymous'
+          audio.preload = 'none'
+          audio.src = streamUrl
+
+          const analyser = actx.createAnalyser()
+          analyser.fftSize = 1024
+          analyser.smoothingTimeConstant = 0.82
+          audioAnalyserRef.current = analyser
+
+          const srcNode = actx.createMediaElementSource(audio)
+          srcNode.connect(analyser)
+          analyser.connect(actx.destination)
+
+          await audio.play()
+          audioRef.current = audio
+          realAudioRef.current = true
+
+          // analyser drives real-time bass/treble/bands
+          const freqBuf = new Uint8Array(analyser.frequencyBinCount)
+          const tick = () => {
+            audioRafRef.current = requestAnimationFrame(tick)
+            if (!realAudioRef.current) return
+            analyser.getByteFrequencyData(freqBuf)
+            const N = freqBuf.length
+
+            const bassEnd = Math.floor(N * 0.08)
+            let bSum = 0
+            for (let i = 0; i < bassEnd; i++) bSum += freqBuf[i]
+            setBass(Math.min(1, (bSum / bassEnd) / 200))
+
+            const tStart = Math.floor(N * 0.72)
+            let tSum = 0
+            for (let i = tStart; i < N; i++) tSum += freqBuf[i]
+            setTreble(Math.min(1, (tSum / (N - tStart)) / 160))
+
+            setBands(Array.from({ length: 16 }, (_, i) => {
+              const s = Math.floor((i / 16) * N * 0.65)
+              const e = Math.floor(((i + 1) / 16) * N * 0.65)
+              let sum = 0
+              for (let j = s; j < e; j++) sum += freqBuf[j]
+              return Math.min(1, (sum / Math.max(1, e - s)) / 175)
+            }))
+          }
+          tick()
+
+          audio.onerror = () => { stopAudio(); setIsPlaying(false); setActive(null) }
+          break
+        } catch { continue }
+      }
+    } catch {
+      // all streams failed — sim takes over via realAudioRef.current = false
+    } finally {
+      setLoadingAudio(false)
     }
   }
 
-  async function sendToShady() {
-    const text = shadyInput.trim()
+  // ── genre tap ─────────────────────────────────────────────────────────────
+  function tapGenre(slug) {
+    if (active === slug) {
+      stopAudio()
+      setActive(null)
+      setIsPlaying(false)
+    } else {
+      setActive(slug)
+      setIsPlaying(true)
+      playGenre(slug)
+    }
+  }
+
+  // ── play / pause ──────────────────────────────────────────────────────────
+  function togglePlay() {
+    if (isPlaying) {
+      if (audioRef.current) audioRef.current.pause()
+      setIsPlaying(false)
+    } else {
+      if (audioRef.current) {
+        audioRef.current.play().catch(() => {})
+        setIsPlaying(true)
+      } else if (active) {
+        setIsPlaying(true)
+        playGenre(active)
+      }
+    }
+  }
+
+  // ── skip / stop ───────────────────────────────────────────────────────────
+  function skipStop() {
+    stopAudio()
+    setActive(null)
+    setIsPlaying(false)
+  }
+
+  // ── skit mode — auto-prompt Shady ─────────────────────────────────────────
+  function activateSkit() {
+    const wasAlreadySkit = mixMode === 'skit'
+    setMixMode(wasAlreadySkit ? 'radio' : 'skit')
+    if (!wasAlreadySkit && !shadyBusy) {
+      setShadyInput('Give us a skit right now — something fierce')
+      setTimeout(() => sendToShady('Give us a skit right now — something fierce'), 100)
+    }
+  }
+
+  // ── Shady chat ────────────────────────────────────────────────────────────
+  async function sendToShady(overrideText) {
+    const text = (typeof overrideText === 'string' ? overrideText : shadyInput).trim()
     if (!text || shadyBusy) return
     setShadyBusy(true); setShadyInput(''); setShadyReply('...')
     try {
-      // get reply text
       const res = await fetch('http://192.168.1.167:8099/shady', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -146,33 +296,30 @@ export default function SoundSystem() {
       if (!reply || reply.trim() === '.') { setShadyReply(''); return }
       setShadyReply(reply)
 
-      // Parse reply for visual effects
       const words = reply.split(' ')
       const wordAnimations = words.map((word, index) => {
-        const upperWord = word.toUpperCase().replace(/[^A-Z]/g, '')
-        
+        const w = word.toUpperCase().replace(/[^A-Z]/g, '')
         return {
           text: word,
-          type: ['GIRL', 'HONEY', 'BITCH', 'QUEEN'].includes(upperWord) ? 'fire' :
-                ['PERIOD', 'ICONIC', 'LEGENDARY', 'FIRE'].includes(upperWord) ? 'snap' :
+          type: ['GIRL','HONEY','BITCH','QUEEN'].includes(w) ? 'fire' :
+                ['PERIOD','ICONIC','LEGENDARY','FIRE'].includes(w) ? 'snap' :
                 word.includes('*') || word.includes('_') ? 'shade' : 'regular',
           delay: index * 200,
           x: Math.random() * 60 + 20,
           y: Math.random() * 40 + 30
         }
       })
-
       setShadyWords(wordAnimations)
 
-      const hasSnapWord = wordAnimations.some(w => w.type === 'snap')
-      if (hasSnapWord) {
+      if (wordAnimations.some(w => w.type === 'snap')) {
         setParticleBurst({ x: Math.random() * 100, y: Math.random() * 100 })
         setTimeout(() => setParticleBurst(null), 1000)
       }
-
       setTimeout(() => setShadyWords([]), 3000)
 
-      // TTS → real-time lip sync
+      // duck music while Shady speaks
+      if (audioRef.current) audioRef.current.volume = 0.18
+
       const speakRes = await fetch('http://192.168.1.167:8099/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -183,9 +330,10 @@ export default function SoundSystem() {
         const url   = URL.createObjectURL(blob)
         const audio = new Audio(url)
 
-        // Web Audio analyser drives mouthOpen → lip particles
         try {
-          const actx     = new (window.AudioContext || window.webkitAudioContext)()
+          const actx = audioCtxRef.current || new (window.AudioContext || window.webkitAudioContext)()
+          if (!audioCtxRef.current) audioCtxRef.current = actx
+          if (actx.state === 'suspended') await actx.resume()
           const src      = actx.createMediaElementSource(audio)
           const analyser = actx.createAnalyser()
           analyser.fftSize = 256
@@ -203,19 +351,22 @@ export default function SoundSystem() {
         } catch {}
 
         await audio.play()
-
         audio.onended = () => {
           URL.revokeObjectURL(url)
           cancelAnimationFrame(mouthRafRef.current)
           setMouthOpen(0)
+          if (audioRef.current) audioRef.current.volume = 1.0
         }
-        await audio.play()
       }
     } catch { setShadyReply('') }
     finally { setShadyBusy(false) }
   }
 
-  const activeGenre = GENRES.find(g => g.slug === active)
+  // vocal mode dims non-vocal genres
+  const visibleGenres = GENRES.map(g => ({
+    ...g,
+    dimmed: mixMode === 'vocal' && !VOCAL_SLUGS.has(g.slug)
+  }))
 
   return (
     <div className="ss-root">
@@ -235,15 +386,12 @@ export default function SoundSystem() {
         </button>
       </header>
 
-      {/* ── ONE unified canvas: particles behind, speakers on top ── */}
+      {/* ── canvas ── */}
       <div className="ss-canvas" ref={canvasAreaRef}>
-        {/* camera layer — deepest */}
         {cameraOn && <SFCamera active={cameraOn} onMotion={() => {}} />}
 
-        {/* ── hero stage — 24/7 live screen, content TBD ── */}
         <div className="ss-hero-layer" />
 
-        {/* particle field — full canvas, always visible */}
         <div className="ss-particle-layer">
           <SFParticleField
             bass={bass}
@@ -254,19 +402,18 @@ export default function SoundSystem() {
           />
         </div>
 
-        {/* Shady word burst — flies on screen when she speaks */}
-        <ShadyStage
-          reply={shadyReply}
-          isActive={shadyBusy || !!shadyReply}
-          stageRef={canvasAreaRef}
-        />
-
-        {/* Shady drag queen fan — waves while she performs */}
+        <ShadyStage reply={shadyReply} isActive={shadyBusy || !!shadyReply} stageRef={canvasAreaRef} />
         <ShadyProps isActive={shadyBusy || !!shadyReply} />
 
-        {/* 4×4 speaker grid — sits over the bottom 62% of the canvas */}
+        {/* loading indicator */}
+        {loadingAudio && (
+          <div className="ss-loading">
+            <span>Tuning in…</span>
+          </div>
+        )}
+
         <div className="ss-grid">
-          {GENRES.map((g, i) => (
+          {visibleGenres.map((g, i) => (
             <SpeakerCell
               key={g.slug}
               genre={g}
@@ -275,21 +422,19 @@ export default function SoundSystem() {
               bass={isPlaying ? bass : 0}
               bandBass={isPlaying ? (bands[i] ?? 0) : 0}
               treble={isPlaying ? treble : 0}
-              isPlaying={isPlaying}
+              isPlaying={isPlaying && active === g.slug}
               fxMode={fxMode}
+              dimmed={g.dimmed}
               onTap={() => !gridMode && tapGenre(g.slug)}
             />
           ))}
         </div>
 
-        {/* 32-box modular overlay — 4×8 grid across the whole canvas */}
         <div className={`ss-box-grid ${gridMode ? 'ss-box-grid--on' : ''}`}>
           {Array.from({ length: 32 }, (_, i) => (
-            <button
-              key={i}
+            <button key={i}
               className={`ss-box-cell ${openBox === i ? 'ss-box-cell--open' : ''}`}
-              onClick={() => setOpenBox(b => b === i ? null : i)}
-            >
+              onClick={() => setOpenBox(b => b === i ? null : i)}>
               {openBox === i && (
                 <div className="ss-box-inner">
                   <span className="ss-box-idx">{String(i + 1).padStart(2, '0')}</span>
@@ -301,34 +446,34 @@ export default function SoundSystem() {
         </div>
       </div>
 
-      {/* ── bottom controls ── */}
+      {/* ── controls ── */}
       <div className="ss-controls">
         <div className="ss-btn-strip">
 
-          <button className="ss-btn" title="Skip"
-            onClick={() => { setActive(null); setIsPlaying(false) }}>
+          {/* skip / stop */}
+          <button className="ss-btn" title="Stop" onClick={skipStop}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/>
             </svg>
           </button>
 
-          <button
-            className={`ss-btn ss-btn--labeled ${isPlaying ? 'ss-btn--cyan' : ''}`}
-            onClick={() => { if (isPlaying) { setIsPlaying(false) } else if (active) { setIsPlaying(true) } }}
-          >
+          {/* play / pause */}
+          <button className={`ss-btn ss-btn--labeled ${isPlaying ? 'ss-btn--cyan' : ''}`} onClick={togglePlay}>
             {isPlaying
               ? <><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span>Pause</span></>
               : <><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg><span>Play</span></>}
           </button>
 
+          {/* skit */}
           <button className={`ss-btn ss-btn--labeled ${mixMode === 'skit' ? 'ss-btn--orange' : ''}`}
-            onClick={() => setMixMode(m => m === 'skit' ? 'radio' : 'skit')}>
+            onClick={activateSkit}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
             </svg>
             <span>Skit</span>
           </button>
 
+          {/* radio */}
           <button className={`ss-btn ss-btn--labeled ${mixMode === 'radio' ? 'ss-btn--amber' : ''}`}
             onClick={() => setMixMode('radio')}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -337,14 +482,16 @@ export default function SoundSystem() {
             <span>Radio</span>
           </button>
 
+          {/* club */}
           <button className={`ss-btn ss-btn--labeled ${mixMode === 'club' ? 'ss-btn--fuchsia' : ''}`}
-            onClick={() => setMixMode('club')}>
+            onClick={() => setMixMode(m => m === 'club' ? 'radio' : 'club')}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
             </svg>
             <span>Club</span>
           </button>
 
+          {/* vocal */}
           <button className={`ss-btn ss-btn--labeled ${mixMode === 'vocal' ? 'ss-btn--emerald' : ''}`}
             onClick={() => setMixMode(m => m === 'vocal' ? 'radio' : 'vocal')}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -356,6 +503,7 @@ export default function SoundSystem() {
             <span>Vocal</span>
           </button>
 
+          {/* pro */}
           <button className="ss-btn ss-btn--labeled ss-btn--pro">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7z"/>
@@ -363,26 +511,25 @@ export default function SoundSystem() {
             <span>Pro</span>
           </button>
 
-          <button
-            className={`ss-btn ss-btn--labeled ${fxMode ? 'ss-btn--fx-on' : ''}`}
-            onClick={() => setFxMode(v => !v)}
-          >
+          {/* fx */}
+          <button className={`ss-btn ss-btn--labeled ${fxMode ? 'ss-btn--fx-on' : ''}`}
+            onClick={() => setFxMode(v => !v)}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
             </svg>
             <span>FX</span>
           </button>
 
-          <button
-            className={`ss-btn ss-btn--labeled ${gridMode ? 'ss-btn--grid-on' : ''}`}
-            onClick={() => { setGridMode(v => !v); setOpenBox(null) }}
-          >
+          {/* zones */}
+          <button className={`ss-btn ss-btn--labeled ${gridMode ? 'ss-btn--grid-on' : ''}`}
+            onClick={() => { setGridMode(v => !v); setOpenBox(null) }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
               <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
             </svg>
             <span>Zones</span>
           </button>
+
         </div>
 
         <div className="ss-shady">
@@ -396,34 +543,20 @@ export default function SoundSystem() {
             disabled={shadyBusy}
           />
           {shadyReply && <p className="ss-shady-reply">{shadyReply}</p>}
-          
-          {/* Word Animations */}
+
           {shadyWords.map((word, i) => (
-            <div
-              key={i}
-              className={`shady-word shady-word-${word.type}`}
-              style={{
-                left: `${word.x}%`,
-                top: `${word.y}%`,
-                animationDelay: `${word.delay}ms`,
-              }}
-            >
+            <div key={i} className={`shady-word shady-word-${word.type}`}
+              style={{ left: `${word.x}%`, top: `${word.y}%`, animationDelay: `${word.delay}ms` }}>
               {word.text}
             </div>
           ))}
-          
-          {/* Particle Burst */}
+
           {particleBurst && (
-            <div
-              className="particle-burst"
-              style={{
-                left: `${particleBurst.x}%`,
-                top: `${particleBurst.y}%`,
-              }}
-            />
+            <div className="particle-burst"
+              style={{ left: `${particleBurst.x}%`, top: `${particleBurst.y}%` }} />
           )}
-          
-          <button className="ss-shady-btn" onClick={sendToShady}
+
+          <button className="ss-shady-btn" onClick={() => sendToShady()}
             disabled={shadyBusy || !shadyInput.trim()}>
             {shadyBusy ? '…' : 'Shady Shot'}
           </button>

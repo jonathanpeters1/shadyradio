@@ -240,6 +240,23 @@
   color: #fff;
   box-shadow: 0 0 18px rgba(255,255,255,0.16);
 }
+/* ── loading indicator ── */
+.ss-loading {
+  position: absolute;
+  top: 38%; left: 50%; transform: translateX(-50%);
+  z-index: 50; pointer-events: none;
+  font-size: 0.62rem; font-weight: 700; letter-spacing: 0.18em;
+  text-transform: uppercase; color: rgba(255,255,255,0.60);
+  animation: loadPulse 0.9s ease-in-out infinite;
+}
+@keyframes loadPulse {
+  0%,100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+
+/* ── dimmed speaker (vocal mode) ── */
+.ss-cell--dimmed { opacity: 0.25; pointer-events: none; }
+
 /* ── iPhone adjustments ── */
 @media (max-height: 700px) {
   .ss-grid { top: 26%; }

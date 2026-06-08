@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 
-export default function SpeakerCell({ genre, idx = 0, active, bass, bandBass = 0, treble, isPlaying, fxMode = false, onTap }) {
+export default function SpeakerCell({ genre, idx = 0, active, bass, bandBass = 0, treble, isPlaying, fxMode = false, dimmed = false, onTap }) {
   const canvasRef = useRef(null)
   const liveRef   = useRef({ bass: 0, bandBass: 0, isPlaying: false, active: false })
   const ringsRef  = useRef([])
@@ -168,7 +168,7 @@ export default function SpeakerCell({ genre, idx = 0, active, bass, bandBass = 0
 
   return (
     <button
-      className={`ss-cell ${active ? 'ss-cell--active' : ''}`}
+      className={`ss-cell ${active ? 'ss-cell--active' : ''} ${dimmed ? 'ss-cell--dimmed' : ''}`}
       onClick={onTap}
       onPointerDown={fireSparkle}
       style={{
