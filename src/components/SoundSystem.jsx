@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import SpeakerCell from './SpeakerCell'
 import SFParticleField from './SFParticleField'
 import SFCamera from './SFCamera'
+import SFHeroSphere from './SFHeroSphere'
 import ShadyStage from './ShadyStage'
 import ShadyProps from './ShadyProps'
 import './SoundSystem.css'
@@ -238,6 +239,9 @@ export default function SoundSystem() {
       <div className="ss-canvas" ref={canvasAreaRef}>
         {/* camera layer — deepest */}
         {cameraOn && <SFCamera active={cameraOn} onMotion={() => {}} />}
+
+        {/* ── hero stage — 24/7 live screen, content TBD ── */}
+        <div className="ss-hero-layer" />
 
         {/* particle field — full canvas, always visible */}
         <div className="ss-particle-layer">
