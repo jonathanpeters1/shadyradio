@@ -1,0 +1,68 @@
+.library {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.library-container {
+  padding: 1rem 0;
+}
+
+.library-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--sonic-primary);
+  margin-bottom: 2rem;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
+  background: var(--sonic-raised);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  text-align: center;
+}
+
+.empty-icon {
+  font-size: 4rem;
+  margin-bottom: 1rem;
+  opacity: 0.5;
+}
+
+.empty-state h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--sonic-primary);
+  margin-bottom: 0.5rem;
+}
+
+.empty-state p {
+  font-size: 0.95rem;
+  color: var(--sonic-secondary);
+  margin-bottom: 2rem;
+}
+
+.import-btn {
+  padding: 0.75rem 2rem;
+  background: var(--sonic-gold);
+  color: var(--sonic-base);
+  border: none;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.2, 0.9, 0.4, 1);
+  box-shadow: 0 4px 15px var(--shadow-gold);
+}
+
+.import-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px var(--shadow-gold);
+}
+
+.import-btn:active {
+  transform: translateY(0);
+}

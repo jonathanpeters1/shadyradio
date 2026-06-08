@@ -1,0 +1,20 @@
+:root {
+  --sonic-base:    #090a0f;
+  --sonic-raised:  #11131a;
+  --sonic-gold:    #d4a64f;
+  --sonic-emerald: #10b981;
+  --sonic-rose:    #f43f5e;
+  --sonic-fuchsia: #d946ef;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+  background: #000;
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+#root { width: 100vw; height: 100vh; }
