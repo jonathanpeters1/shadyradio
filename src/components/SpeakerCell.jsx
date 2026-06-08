@@ -48,27 +48,19 @@ export default function SpeakerCell({ genre, idx = 0, active, bass, bandBass = 0
 
       ctx.clearRect(0, 0, w, h)
 
-      // active center glow — aggressive red flood
+      // glow stays INSIDE the cone — no bleed past the cell edge
       if (ip && act && bb > 0) {
-        // inner hard red core
-        const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * (0.30 + bb * 0.40))
-        grd.addColorStop(0,   `rgba(255,${Math.round(20 + bb * 40)},20,${(bb * 0.72).toFixed(3)})`)
-        grd.addColorStop(0.4, `rgba(220,30,30,${(bb * 0.38).toFixed(3)})`)
+        // red glow confined to inner cone area
+        const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 0.55)
+        grd.addColorStop(0,   `rgba(255,40,20,${(bb * 0.60).toFixed(3)})`)
+        grd.addColorStop(0.5, `rgba(220,20,20,${(bb * 0.28).toFixed(3)})`)
         grd.addColorStop(1,   'rgba(0,0,0,0)')
         ctx.fillStyle = grd
         ctx.fillRect(0, 0, w, h)
-        // outer bleed — bleeds past edges on big hits
-        if (bb > 0.5) {
-          const bleed = ctx.createRadialGradient(cx, cy, maxR * 0.3, cx, cy, maxR * 1.2)
-          bleed.addColorStop(0, `rgba(180,0,0,${((bb - 0.5) * 0.30).toFixed(3)})`)
-          bleed.addColorStop(1, 'rgba(0,0,0,0)')
-          ctx.fillStyle = bleed
-          ctx.fillRect(0, 0, w, h)
-        }
-      } else if (ip && !act && bb > 0.1) {
-        // inactive: very faint frequency response
-        const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 0.35)
-        grd.addColorStop(0,   `rgba(212,166,79,${(bb * 0.09).toFixed(3)})`)
+      } else if (ip && !act && bb > 0.08) {
+        // inactive: very faint white pulse
+        const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 0.40)
+        grd.addColorStop(0,   `rgba(255,255,255,${(bb * 0.07).toFixed(3)})`)
         grd.addColorStop(1,   'rgba(0,0,0,0)')
         ctx.fillStyle = grd
         ctx.fillRect(0, 0, w, h)

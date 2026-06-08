@@ -4,6 +4,7 @@ import SFParticleField from './SFParticleField'
 import SFCamera from './SFCamera'
 import ShadyStage from './ShadyStage'
 import ShadyProps from './ShadyProps'
+import ChatPanel from './ChatPanel'
 import './SoundSystem.css'
 
 const GENRES = [
@@ -67,6 +68,7 @@ export default function SoundSystem() {
   const [gridMode, setGridMode]       = useState(false)
   const [openBox, setOpenBox]         = useState(null)
   const [fxMode, setFxMode]           = useState(false)
+  const [chatOpen, setChatOpen]       = useState(false)
 
   const wsRef           = useRef(null)
   const mouthRafRef     = useRef(0)
@@ -468,38 +470,39 @@ export default function SoundSystem() {
             <span>Zones</span>
           </button>
 
-        </div>
-
-        <div className="ss-shady">
-          <span className="ss-shady-dot" />
-          <input
-            className="ss-shady-input"
-            value={shadyInput}
-            onChange={e => setShadyInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') sendToShady() }}
-            placeholder="Speak to Shady..."
-            disabled={shadyBusy}
-          />
-          {shadyReply && <p className="ss-shady-reply">{shadyReply}</p>}
-
-          {shadyWords.map((word, i) => (
-            <div key={i} className={`shady-word shady-word-${word.type}`}
-              style={{ left: `${word.x}%`, top: `${word.y}%`, animationDelay: `${word.delay}ms` }}>
-              {word.text}
-            </div>
-          ))}
-
-          {particleBurst && (
-            <div className="particle-burst"
-              style={{ left: `${particleBurst.x}%`, top: `${particleBurst.y}%` }} />
-          )}
-
-          <button className="ss-shady-btn" onClick={() => sendToShady()}
-            disabled={shadyBusy || !shadyInput.trim()}>
-            {shadyBusy ? '…' : 'Shady Shot'}
+          {/* chat */}
+          <button className={`ss-btn ss-btn--labeled ${chatOpen ? 'ss-btn--cyan' : ''}`}
+            onClick={() => setChatOpen(v => !v)}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span>Chat</span>
           </button>
+
         </div>
+
+        {/* shady words / particle bursts — inside canvas, not controls */}
       </div>
+
+      {/* ── chat panel ── */}
+      <ChatPanel
+        isOpen={chatOpen}
+        onClose={() => setChatOpen(false)}
+        onShadyMessage={sendToShady}
+        shadyReply={shadyReply}
+      />
+
+      {/* flying words + particle burst rendered over full screen */}
+      {shadyWords.map((word, i) => (
+        <div key={i} className={`shady-word shady-word-${word.type}`}
+          style={{ left: `${word.x}%`, top: `${word.y}%`, animationDelay: `${word.delay}ms` }}>
+          {word.text}
+        </div>
+      ))}
+      {particleBurst && (
+        <div className="particle-burst"
+          style={{ left: `${particleBurst.x}%`, top: `${particleBurst.y}%` }} />
+      )}
 
     </div>
   )
