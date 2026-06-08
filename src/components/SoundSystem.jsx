@@ -106,14 +106,10 @@ export default function SoundSystem() {
         wsRef.current = ws
         ws.onopen = () => { wsConnected = true; cancelAnimationFrame(simRaf) }
         ws.onmessage = (e) => {
-          if (realAudioRef.current) return
           const raw = e.data
           if (raw.startsWith('METER:')) {
             const vals = raw.slice(7).trim().split(/\s+/).map(Number)
-            if (vals.length >= 16) {
-              setBass(vals[0] ?? 0)
-              setTreble(vals.slice(8).reduce((a, v) => a + v, 0) / 8)
-            }
+            if (vals.length >= 16) setBass(vals[0] ?? 0)
           }
         }
         ws.onclose = () => { wsConnected = false; wsRef.current = null; startSim(); retry = setTimeout(connect, 2500) }
@@ -155,58 +151,25 @@ export default function SoundSystem() {
     setBass(0)
     setLoadingAudio(true)
 
-    // create AudioContext NOW inside the user gesture — iOS requires this
-    if (!audioCtxRef.current) {
-      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
-    }
-    const actx = audioCtxRef.current
-    if (actx.state === 'suspended') actx.resume()
-
     try {
       const urls = await fetchStreamUrls(slug)
 
-      for (const rawUrl of urls.slice(0, 10)) {
+      for (const streamUrl of urls.slice(0, 8)) {
         try {
-          const proxyUrl = `/stream-proxy?url=${encodeURIComponent(rawUrl)}`
           const audio = new Audio()
-          audio.crossOrigin = 'anonymous'
           audio.preload = 'none'
-          audio.src = proxyUrl
-
-          const analyser = actx.createAnalyser()
-          analyser.fftSize = 2048
-          analyser.smoothingTimeConstant = 0.78
-
-          const srcNode = actx.createMediaElementSource(audio)
-          srcNode.connect(analyser)
-          analyser.connect(actx.destination)
-
+          audio.src = streamUrl
           await audio.play()
           audioRef.current = audio
-          setLoadingAudio(false)
-
-          // all 16 speakers get same bass → pump together
-          const freqBuf = new Uint8Array(analyser.frequencyBinCount)
-          const tick = () => {
-            audioRafRef.current = requestAnimationFrame(tick)
-            analyser.getByteFrequencyData(freqBuf)
-            const N = freqBuf.length
-            // bass = first 10% of spectrum (sub + kick)
-            const end = Math.floor(N * 0.10)
-            let sum = 0
-            for (let i = 0; i < end; i++) sum += freqBuf[i]
-            setBass(Math.min(1, (sum / end) / 160))
-          }
-          tick()
-
           audio.onerror = () => { stopAudio(); setIsPlaying(false); setActive(null) }
+          setLoadingAudio(false)
           return
         } catch { continue }
       }
     } catch {}
 
     setLoadingAudio(false)
-    // streams failed — sim already running via isPlayingRef
+    // stream failed — sim continues to drive animation
   }
 
   // ── genre tap ─────────────────────────────────────────────────────────────
