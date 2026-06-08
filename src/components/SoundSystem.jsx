@@ -56,7 +56,6 @@ export default function SoundSystem() {
   const [loadingAudio, setLoadingAudio] = useState(false)
   const [bass, setBass]               = useState(0)
   const [treble, setTreble]           = useState(0)
-  const [bands, setBands]             = useState(() => new Array(16).fill(0))
   const [mixMode, setMixMode]         = useState('radio')
   const [shadyInput, setShadyInput]   = useState('')
   const [shadyReply, setShadyReply]   = useState('')
@@ -72,11 +71,13 @@ export default function SoundSystem() {
   const wsRef           = useRef(null)
   const mouthRafRef     = useRef(0)
   const canvasAreaRef   = useRef(null)
-  const audioRef        = useRef(null)      // current HTMLAudioElement
-  const audioCtxRef     = useRef(null)      // shared AudioContext
-  const audioAnalyserRef= useRef(null)      // AnalyserNode
-  const audioRafRef     = useRef(0)         // RAF for analyser loop
-  const realAudioRef    = useRef(false)     // true when real stream is live
+  const audioRef        = useRef(null)
+  const audioCtxRef     = useRef(null)
+  const audioRafRef     = useRef(0)
+  const isPlayingRef    = useRef(false)
+
+  // sync ref on every render — no stale closure in RAF loops
+  isPlayingRef.current = isPlaying
 
   // ── sim loop (fallback when no real stream) ─────────────────────────────
   useEffect(() => {
@@ -86,22 +87,13 @@ export default function SoundSystem() {
       if (wsConnected) return
       const tick = () => {
         simT += 0.016
-        if (!realAudioRef.current) {
-          setBass(() => {
-            if (!isPlaying) return 0
-            return Math.max(0, Math.sin(simT * 2.1) * 0.45 + Math.sin(simT * 5.3) * 0.15 + 0.28)
-          })
-          setBands(() => {
-            if (!isPlaying) return new Array(16).fill(0)
-            return Array.from({ length: 16 }, (_, i) => {
-              const fBase = 0.9 + Math.pow(i / 15, 1.4) * 5.5
-              const fHarm = fBase * (1.7 + (i % 3) * 0.4)
-              const raw = Math.sin(simT * fBase + i * 0.55) * 0.48
-                        + Math.sin(simT * fHarm) * 0.22
-                        + Math.max(0, Math.sin(simT * 2.1)) * (i < 4 ? 0.35 : 0.12)
-              return Math.max(0, Math.min(1, raw + 0.28))
-            })
-          })
+        // only run when no real stream is connected
+        if (!audioRef.current) {
+          if (isPlayingRef.current) {
+            setBass(Math.max(0, Math.sin(simT * 2.1) * 0.45 + Math.sin(simT * 5.3) * 0.15 + 0.28))
+          } else {
+            setBass(0)
+          }
         }
         simRaf = requestAnimationFrame(tick)
       }
@@ -139,54 +131,51 @@ export default function SoundSystem() {
     }
   }, [])
 
-  useEffect(() => { if (!isPlaying && !realAudioRef.current) setBass(0) }, [isPlaying])
-
   // ── audio engine ─────────────────────────────────────────────────────────
+
   function stopAudio() {
-    realAudioRef.current = false
     cancelAnimationFrame(audioRafRef.current)
     if (audioRef.current) {
       audioRef.current.pause()
       audioRef.current.src = ''
       audioRef.current = null
     }
-    audioAnalyserRef.current = null
-    setBass(0); setTreble(0); setBands(new Array(16).fill(0))
   }
 
   async function fetchStreamUrls(slug) {
     const tag = GENRE_TAGS[slug] || 'house'
-    const url = `https://de1.api.radio-browser.info/json/stations/bytag/${encodeURIComponent(tag)}?limit=30&hidebroken=true&order=clickcount&is_https=false`
-    const res = await fetch(url, { headers: { 'User-Agent': 'ShadyRadio/1.0' } })
+    const url = `https://de1.api.radio-browser.info/json/stations/bytag/${encodeURIComponent(tag)}?limit=30&hidebroken=true&order=clickcount`
+    const res = await fetch(url)
     const stations = await res.json()
     return stations.map(s => s.url_resolved || s.url).filter(Boolean)
   }
 
   async function playGenre(slug) {
     stopAudio()
+    setBass(0)
     setLoadingAudio(true)
+
+    // create AudioContext NOW inside the user gesture — iOS requires this
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    }
+    const actx = audioCtxRef.current
+    if (actx.state === 'suspended') actx.resume()
 
     try {
       const urls = await fetchStreamUrls(slug)
 
-      // lazy-create AudioContext (must happen after user gesture)
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
-      }
-      const actx = audioCtxRef.current
-      if (actx.state === 'suspended') await actx.resume()
-
-      for (const streamUrl of urls.slice(0, 8)) {
+      for (const rawUrl of urls.slice(0, 10)) {
         try {
+          const proxyUrl = `/stream-proxy?url=${encodeURIComponent(rawUrl)}`
           const audio = new Audio()
           audio.crossOrigin = 'anonymous'
           audio.preload = 'none'
-          audio.src = streamUrl
+          audio.src = proxyUrl
 
           const analyser = actx.createAnalyser()
-          analyser.fftSize = 1024
-          analyser.smoothingTimeConstant = 0.82
-          audioAnalyserRef.current = analyser
+          analyser.fftSize = 2048
+          analyser.smoothingTimeConstant = 0.78
 
           const srcNode = actx.createMediaElementSource(audio)
           srcNode.connect(analyser)
@@ -194,45 +183,30 @@ export default function SoundSystem() {
 
           await audio.play()
           audioRef.current = audio
-          realAudioRef.current = true
+          setLoadingAudio(false)
 
-          // analyser drives real-time bass/treble/bands
+          // all 16 speakers get same bass → pump together
           const freqBuf = new Uint8Array(analyser.frequencyBinCount)
           const tick = () => {
             audioRafRef.current = requestAnimationFrame(tick)
-            if (!realAudioRef.current) return
             analyser.getByteFrequencyData(freqBuf)
             const N = freqBuf.length
-
-            const bassEnd = Math.floor(N * 0.08)
-            let bSum = 0
-            for (let i = 0; i < bassEnd; i++) bSum += freqBuf[i]
-            setBass(Math.min(1, (bSum / bassEnd) / 200))
-
-            const tStart = Math.floor(N * 0.72)
-            let tSum = 0
-            for (let i = tStart; i < N; i++) tSum += freqBuf[i]
-            setTreble(Math.min(1, (tSum / (N - tStart)) / 160))
-
-            setBands(Array.from({ length: 16 }, (_, i) => {
-              const s = Math.floor((i / 16) * N * 0.65)
-              const e = Math.floor(((i + 1) / 16) * N * 0.65)
-              let sum = 0
-              for (let j = s; j < e; j++) sum += freqBuf[j]
-              return Math.min(1, (sum / Math.max(1, e - s)) / 175)
-            }))
+            // bass = first 10% of spectrum (sub + kick)
+            const end = Math.floor(N * 0.10)
+            let sum = 0
+            for (let i = 0; i < end; i++) sum += freqBuf[i]
+            setBass(Math.min(1, (sum / end) / 160))
           }
           tick()
 
           audio.onerror = () => { stopAudio(); setIsPlaying(false); setActive(null) }
-          break
+          return
         } catch { continue }
       }
-    } catch {
-      // all streams failed — sim takes over via realAudioRef.current = false
-    } finally {
-      setLoadingAudio(false)
-    }
+    } catch {}
+
+    setLoadingAudio(false)
+    // streams failed — sim already running via isPlayingRef
   }
 
   // ── genre tap ─────────────────────────────────────────────────────────────
@@ -242,6 +216,7 @@ export default function SoundSystem() {
       setActive(null)
       setIsPlaying(false)
     } else {
+      // speakers start pumping via sim immediately while stream loads
       setActive(slug)
       setIsPlaying(true)
       playGenre(slug)
@@ -420,9 +395,9 @@ export default function SoundSystem() {
               idx={i}
               active={active === g.slug}
               bass={isPlaying ? bass : 0}
-              bandBass={isPlaying ? (bands[i] ?? 0) : 0}
+              bandBass={isPlaying ? bass : 0}
               treble={isPlaying ? treble : 0}
-              isPlaying={isPlaying && active === g.slug}
+              isPlaying={isPlaying}
               fxMode={fxMode}
               dimmed={g.dimmed}
               onTap={() => !gridMode && tapGenre(g.slug)}
