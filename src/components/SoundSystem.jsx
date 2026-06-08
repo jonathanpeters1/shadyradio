@@ -153,25 +153,58 @@ export default function SoundSystem() {
     setBass(0)
     setLoadingAudio(true)
 
+    // AudioContext must be created inside user gesture (before any await)
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    }
+    const actx = audioCtxRef.current
+    if (actx.state === 'suspended') actx.resume()
+
     try {
       const urls = await fetchStreamUrls(slug)
 
-      for (const streamUrl of urls.slice(0, 8)) {
+      for (const rawUrl of urls.slice(0, 10)) {
         try {
+          // proxy → same origin → crossOrigin works → Web Audio can analyse it
+          const proxyUrl = `/stream-proxy?url=${encodeURIComponent(rawUrl)}`
           const audio = new Audio()
+          audio.crossOrigin = 'anonymous'
           audio.preload = 'none'
-          audio.src = streamUrl
+          audio.src = proxyUrl
+
+          // wire through analyser before play()
+          const analyser = actx.createAnalyser()
+          analyser.fftSize = 1024
+          analyser.smoothingTimeConstant = 0.75
+          const src = actx.createMediaElementSource(audio)
+          src.connect(analyser)
+          analyser.connect(actx.destination)
+
           await audio.play()
           audioRef.current = audio
-          audio.onerror = () => { stopAudio(); setIsPlaying(false); setActive(null) }
           setLoadingAudio(false)
+
+          // read bass from actual waveform every frame
+          const buf = new Uint8Array(analyser.frequencyBinCount)
+          const tick = () => {
+            audioRafRef.current = requestAnimationFrame(tick)
+            analyser.getByteFrequencyData(buf)
+            // bass = bins 0–8% of spectrum (sub bass + kick drum)
+            const end = Math.max(1, Math.floor(buf.length * 0.08))
+            let sum = 0
+            for (let i = 0; i < end; i++) sum += buf[i]
+            setBass(Math.min(1, (sum / end) / 150))
+          }
+          tick()
+
+          audio.onerror = () => { stopAudio(); setIsPlaying(false); setActive(null) }
           return
         } catch { continue }
       }
     } catch {}
 
     setLoadingAudio(false)
-    // stream failed — sim continues to drive animation
+    // all streams failed — sim drives animation as fallback
   }
 
   // ── genre tap ─────────────────────────────────────────────────────────────
