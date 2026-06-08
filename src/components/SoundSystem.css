@@ -128,6 +128,15 @@
   filter: contrast(1.55) brightness(1.45) saturate(0.55) sepia(0.04);
 }
 
+/* cone layer — clips to center circle so only the inner cone moves */
+.ss-woofer-cone {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  clip-path: circle(38% at 50% 50%);
+  will-change: transform;
+}
+
 
 .ss-speaker-canvas {
   position: absolute; inset: 0;
