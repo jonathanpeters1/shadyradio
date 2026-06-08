@@ -2,7 +2,9 @@ import React from 'react'
 
 export default function SpeakerCell({ genre, idx = 0, active, bass, bandBass = 0, isPlaying, dimmed = false, onTap }) {
   const b = bandBass
-  const scale = isPlaying ? 1 + b * 0.32 : 1
+  // Real cone excursion: tiny forward push (3-5% scale) + brightness spike as cone faces you
+  const scale      = isPlaying ? 1 + b * 0.045 : 1
+  const brightness = isPlaying ? 1 + b * 0.9   : 1   // center flares bright on each hit
 
   return (
     <button
@@ -11,17 +13,18 @@ export default function SpeakerCell({ genre, idx = 0, active, bass, bandBass = 0
     >
       <div className="ss-cell-img-wrap">
 
-        {/* layer 1 — full speaker image, frame never moves */}
+        {/* layer 1 — full speaker including frame, always static */}
         <img src="/woofer.png" alt={genre.name} className="ss-woofer" />
 
-        {/* layer 2 — same image clipped to cone only, this pumps */}
+        {/* layer 2 — cone only: pushes forward (brightness) + micro-scale snap */}
         <img
           src="/woofer.png"
           aria-hidden="true"
           className="ss-woofer ss-woofer-cone"
           style={{
-            transform: `scale(${scale.toFixed(3)})`,
-            transition: isPlaying ? 'transform 38ms cubic-bezier(0.1,1.8,0.3,1)' : 'none',
+            transform:  `scale(${scale.toFixed(4)})`,
+            filter:     `brightness(${brightness.toFixed(3)}) contrast(1.55) saturate(0.55) sepia(0.04)`,
+            transition: isPlaying ? 'transform 18ms linear, filter 18ms linear' : 'none',
           }}
         />
 
