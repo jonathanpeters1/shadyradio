@@ -110,7 +110,6 @@ export default function ChatPanel({ onShadyMessage, shadyReply, isOpen, onClose 
           </button>
         </div>
 
-        <button className="cp-close" onClick={onClose}>✕</button>
       </div>
 
       <div className="cp-messages">

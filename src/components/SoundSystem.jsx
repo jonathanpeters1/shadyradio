@@ -481,16 +481,14 @@ export default function SoundSystem() {
 
         </div>
 
-        {/* shady words / particle bursts — inside canvas, not controls */}
+        {/* ── chat — inline below buttons, no new window ── */}
+        <ChatPanel
+          isOpen={chatOpen}
+          onClose={() => setChatOpen(false)}
+          onShadyMessage={sendToShady}
+          shadyReply={shadyReply}
+        />
       </div>
-
-      {/* ── chat panel ── */}
-      <ChatPanel
-        isOpen={chatOpen}
-        onClose={() => setChatOpen(false)}
-        onShadyMessage={sendToShady}
-        shadyReply={shadyReply}
-      />
 
       {/* flying words + particle burst rendered over full screen */}
       {shadyWords.map((word, i) => (
