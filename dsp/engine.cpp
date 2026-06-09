@@ -19,6 +19,16 @@ extern void init_beat_tracker(int sample_rate, int buffer_size);
 extern void process_beat_tracker(int channel, const float* samples, int num_samples);
 extern void reset_beat_tracker(int channel);
 
+// Internal automix functions
+extern void init_automix(int sample_rate, int buffer_size);
+extern void process_automix(const float* channel_rms, int num_channels, int samples_processed);
+extern float get_automix_gain(int channel);
+extern void set_channel_automix_active(int channel, int active);
+extern int get_active_channel();
+extern int get_pending_channel();
+extern float get_crossfade_progress();
+extern int get_crossfade_state();
+
 static int   g_sample_rate  = 44100;
 static int   g_buffer_size  = 128;
 static float g_input[16 * 128]  = {};
@@ -40,6 +50,9 @@ void init_engine(int sample_rate, int buffer_size) {
 
   // Initialize beat tracking system
   init_beat_tracker(sample_rate, buffer_size);
+
+  // Initialize automix system
+  init_automix(sample_rate, buffer_size);
 }
 
 void process_audio() {
@@ -49,7 +62,7 @@ void process_audio() {
     process_beat_tracker(ch, g_input + ch * g_buffer_size, g_buffer_size);
   }
 
-  // Process all active channels through EQ and compression, then sum to stereo
+  // Process all active channels through EQ, compression, and automix, then sum to stereo
   for (int s = 0; s < g_buffer_size; s++) {
     float sumL = 0, sumR = 0;
     for (int ch = 0; ch < 16; ch++) {
@@ -61,8 +74,11 @@ void process_audio() {
       // Apply per-channel compression
       sample = process_channel_compressor(ch, sample);
 
-      // Apply gain and sum to stereo
-      sample = sample * g_gain[ch];
+      // Apply automix crossfade gain + user channel gain
+      float automix_gain = get_automix_gain(ch);
+      sample = sample * g_gain[ch] * automix_gain;
+
+      // Sum to stereo
       sumL += sample * 0.5f;
       sumR += sample * 0.5f;
     }
@@ -71,17 +87,26 @@ void process_audio() {
     g_output[g_buffer_size + s] = process_master_limiter(sumR);
   }
   // compute per-channel RMS (post-EQ, pre-compression for metering)
+  float channel_rms[16];
   for (int ch = 0; ch < 16; ch++) {
     float rms = 0;
     for (int s = 0; s < g_buffer_size; s++) {
       float x = process_channel_eq(ch, g_input[ch * g_buffer_size + s]);
       rms += x * x;
     }
-    g_meter[ch] = sqrtf(rms / g_buffer_size);
+    channel_rms[ch] = sqrtf(rms / g_buffer_size);
+    g_meter[ch] = channel_rms[ch];
   }
 
-  // Update meter data for active channel (for automix visibility)
-  int active_ch = static_cast<int>(g_meter[16]);
+  // Process automix decision engine
+  process_automix(channel_rms, 16, g_buffer_size);
+
+  // Update meter data for automix visibility
+  g_meter[16] = static_cast<float>(get_active_channel());
+  g_meter[17] = static_cast<float>(get_pending_channel());
+  g_meter[18] = get_crossfade_progress();
+
+  int active_ch = get_active_channel();
   if (active_ch >= 0 && active_ch < 16) {
     g_meter[19] = get_channel_bpm(active_ch);
   }
@@ -91,7 +116,12 @@ float* get_input_buffer()  { return g_input; }
 float* get_output_buffer() { return g_output; }
 float* get_meter_buffer()  { return g_meter; }
 
-void set_channel_active(int ch, int active) { if (ch>=0&&ch<16) g_active[ch]=active; }
+void set_channel_active(int ch, int active) {
+  if (ch>=0&&ch<16) {
+    g_active[ch]=active;
+    set_channel_automix_active(ch, active);
+  }
+}
 void set_channel_gain(int ch, float gain)   { if (ch>=0&&ch<16) g_gain[ch]=gain; }
 void set_channel_compression(int ch, float threshold_db, float ratio) {
   if (ch >= 0 && ch < 16) {
