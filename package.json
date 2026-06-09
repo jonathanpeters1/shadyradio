@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:dsp": "cd dsp && emcmake cmake . && emmake make && cd ..",
+    "build:dsp:direct": "emcc dsp/engine.cpp dsp/filters.cpp dsp/dynamics.cpp dsp/mixer.cpp dsp/beat_tracker.cpp dsp/automix.cpp -O3 -s WASM=1 -s EXPORTED_FUNCTIONS='[\"_init_engine\",\"_process_audio\",\"_get_input_buffer\",\"_get_output_buffer\",\"_get_meter_buffer\",\"_set_channel_active\",\"_set_channel_gain\",\"_set_channel_eq\",\"_get_channel_bpm\",\"_get_channel_beat_phase\",\"_get_channel_phrase_phase\",\"_get_channel_bpm_locked\"]' -s EXPORTED_RUNTIME_METHODS='[\"HEAPF32\",\"HEAP32\"]' -s ALLOW_MEMORY_GROWTH=1 -o public/dsp/engine.js"
   },
   "dependencies": {
     "react": "^18.2.0",
