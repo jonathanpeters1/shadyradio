@@ -62,6 +62,8 @@ class SFEngineProcessor extends AudioWorkletProcessor {
             inputPtr  = wasm._get_input_buffer()
             outputPtr = wasm._get_output_buffer()
             meterPtr  = wasm._get_meter_buffer()
+            // JS owns the crossfade — tell WASM automix to pass through
+            wasm._set_automix_bypass(1)
             wasmReady = true
             this.port.postMessage({ type: 'wasm-ready' })
           }).catch(err => {
@@ -88,6 +90,7 @@ class SFEngineProcessor extends AudioWorkletProcessor {
           break
         }
 
+        case 'set-automix-bypass': wasm?._set_automix_bypass(d.value); break
         case 'set-active':       wasm?._set_channel_active(d.channel, d.value); break
         case 'set-gain':         wasm?._set_channel_gain(d.channel, d.value); break
         case 'set-eq':           wasm?._set_channel_eq(d.channel, d.low, d.mid, d.high); break

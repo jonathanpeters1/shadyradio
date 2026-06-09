@@ -158,6 +158,7 @@ extern void seed_beat_tracker_bpm(int channel, float bpm);
 // Pre-analyzed key hints (automix.cpp)
 extern int get_channel_key(int channel);
 extern void set_channel_key(int channel, int camelot_key);
+extern void set_automix_bypass_internal(int bypass);
 
 static float g_channel_bpm_hint[16] = {};  // 0 = no hint
 
@@ -186,6 +187,11 @@ EMSCRIPTEN_KEEPALIVE
 int get_channel_key_hint(int ch) {
   if (ch < 0 || ch >= 16) return -1;
   return g_channel_key_hint[ch];
+}
+
+EMSCRIPTEN_KEEPALIVE
+void set_automix_bypass(int bypass) {
+  set_automix_bypass_internal(bypass);
 }
 
 } // extern "C"

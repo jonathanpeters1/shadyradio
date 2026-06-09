@@ -417,9 +417,18 @@ void process_automix(const float* channel_rms, int num_channels, int samples_pro
   }
 }
 
+// Bypass flag — when set, automix returns 1.0 for all active channels
+// so JS crossfade (set_channel_gain) is the sole gain control
+static int g_automix_bypass = 1;  // default ON — JS owns the crossfade
+
+void set_automix_bypass_internal(int bypass) {
+  g_automix_bypass = bypass;
+}
+
 // Get automix-controlled gain for a channel
 float get_automix_gain(int channel) {
   if (channel >= 0 && channel < MAX_CHANNELS) {
+    if (g_automix_bypass) return (g_channel_active[channel] > 0) ? 1.0f : 0.0f;
     return g_channel_gains[channel];
   }
   return 0.0f;

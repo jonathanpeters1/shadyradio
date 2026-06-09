@@ -25,6 +25,11 @@ void  set_channel_bpm(int channel, float bpm) __attribute__((export_name("_set_c
 void  set_channel_key(int channel, int camelot_key) __attribute__((export_name("_set_channel_key")));  // set Camelot key (0-23 encoded)
 int   get_channel_key_hint(int channel) __attribute__((export_name("_get_channel_key_hint")));              // get stored key
 
+// Automix bypass — when enabled, get_automix_gain() always returns 1.0 for active channels
+// so JS can own the crossfade gain exclusively via set_channel_gain()
+void  set_automix_bypass(int bypass) __attribute__((export_name("_set_automix_bypass")));   // 1=bypass, 0=WASM automix
+void  set_automix_bypass_internal(int bypass);  // called by engine.cpp wrapper
+
 #ifdef __cplusplus
 }
 #endif
