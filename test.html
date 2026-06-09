@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>DSP Cycle Test</title>
+  <style>
+    body { font-family: monospace; background: #000; color: #0f0; padding: 40px; text-align: center; }
+    button { font-size: 32px; padding: 20px 40px; background: #0f0; color: #000; border: none; cursor: pointer; }
+    button:hover { background: #0a0; }
+    #status { font-size: 20px; margin-top: 30px; line-height: 1.6; }
+    .track { color: #0ff; font-size: 28px; }
+    .bar { color: #ff0; }
+    .mixing { color: #f00; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>DSP Cycle — 5 Tracks, 32 Bars</h1>
+  <button id="start">START</button>
+  <div id="status">Click START to begin</div>
+
+  <script>
+    const TRACKS = [
+      '/audio/test-track-1.mp3',
+      '/audio/test-track-2.mp3',
+      '/audio/test-track-3.mp3',
+      '/audio/test-track-4.mp3',
+      '/audio/test-track-5.mp3'
+    ];
+
+    const BPM = 120;
+    const SECONDS_PER_BEAT = 60 / BPM;
+    const BARS_PER_TRACK = 32;
+    const BEATS_PER_BAR = 4;
+    const CROSSFADE_SECONDS = 2;
+    const SECONDS_PER_TRACK = BARS_PER_TRACK * BEATS_PER_BAR * SECONDS_PER_BEAT; // 64 seconds
+
+    let audioCtx = null;
+    let worklet = null;
+    let currentTrackIdx = 0;
+    let isPlaying = false;
+    let barInterval = null;
+
+    const statusEl = document.getElementById('status');
+
+    async function initDSP() {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      await audioCtx.resume();
+
+      await audioCtx.audioWorklet.addModule('/audio/engine.worklet.js');
+      worklet = new AudioWorkletNode(audioCtx, 'sf-engine', {
+        numberOfInputs: 16,
+        numberOfOutputs: 1,
+        outputChannelCount: [2]
+      });
+
+      const wasmResponse = await fetch('/dsp/engine.wasm');
+      const wasmBuffer = await wasmResponse.arrayBuffer();
+
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('WASM timeout')), 5000);
+        worklet.port.onmessage = (e) => {
+          if (e.data.type === 'ready') {
+            clearTimeout(timeout);
+            resolve();
+          } else if (e.data.type === 'error') {
+            clearTimeout(timeout);
+            reject(new Error(e.data.message));
+          }
+        };
+        worklet.port.postMessage({ type: 'init-wasm', buffer: wasmBuffer });
+      });
+
+      worklet.connect(audioCtx.destination);
+    }
+
+    function playTrackOnChannel(trackIdx, channelIdx) {
+      const audio = new Audio(TRACKS[trackIdx]);
+      audio.crossOrigin = 'anonymous';
+      audio.preload = 'auto';
+
+      const source = audioCtx.createMediaElementSource(audio);
+      source.connect(worklet, 0, channelIdx);
+
+      worklet.port.postMessage({ type: 'set-active', channel: channelIdx, value: 1 });
+      worklet.port.postMessage({ type: 'set-gain', channel: channelIdx, value: 1.0 });
+
+      return { audio, source };
+    }
+
+    function fadeChannel(channelIdx, fromGain, toGain, duration) {
+      const steps = 20;
+      const stepTime = (duration * 1000) / steps;
+      for (let i = 0; i <= steps; i++) {
+        setTimeout(() => {
+          const t = i / steps;
+          const gain = fromGain + (toGain - fromGain) * t;
+          worklet.port.postMessage({ type: 'set-gain', channel: channelIdx, value: gain });
+        }, i * stepTime);
+      }
+    }
+
+    function stopChannel(channelIdx) {
+      worklet.port.postMessage({ type: 'set-active', channel: channelIdx, value: 0 });
+      worklet.port.postMessage({ type: 'set-gain', channel: channelIdx, value: 0 });
+    }
+
+    async function cycleTracks() {
+      isPlaying = true;
+      document.getElementById('start').style.display = 'none';
+
+      let activeChannel = 0;
+      let channelA = null;
+      let channelB = null;
+
+      function updateDisplay(trackIdx, isMixing) {
+        const mixingHtml = isMixing ? '<br><span class="mixing">MIXING...</span>' : '';
+        statusEl.innerHTML = `
+          <div class="track">Track ${trackIdx + 1} / ${TRACKS.length}</div>
+          <div class="bar" id="bar-display">Bar 1 / ${BARS_PER_TRACK}</div>
+          <div>BPM: ${BPM}</div>
+          ${mixingHtml}
+        `;
+      }
+
+      function startBarCounter() {
+        let bar = 1;
+        if (barInterval) clearInterval(barInterval);
+        barInterval = setInterval(() => {
+          if (!isPlaying) {
+            clearInterval(barInterval);
+            return;
+          }
+          const barDisplay = document.getElementById('bar-display');
+          if (barDisplay) {
+            barDisplay.innerHTML = `Bar ${bar} / ${BARS_PER_TRACK}`;
+          }
+          bar++;
+          if (bar > BARS_PER_TRACK) bar = 1;
+        }, BEATS_PER_BAR * SECONDS_PER_BEAT * 1000);
+      }
+
+      function scheduleNext() {
+        const nextTrackIdx = (currentTrackIdx + 1) % TRACKS.length;
+        const nextChannel = activeChannel === 0 ? 1 : 0;
+
+        // Schedule crossfade before track ends
+        setTimeout(() => {
+          // Load next track on other channel
+          if (nextChannel === 0) {
+            channelA = playTrackOnChannel(nextTrackIdx, 0);
+            channelA.audio.play();
+          } else {
+            channelB = playTrackOnChannel(nextTrackIdx, 1);
+            channelB.audio.play();
+          }
+
+          updateDisplay(nextTrackIdx, true);
+
+          // Crossfade
+          fadeChannel(activeChannel, 1.0, 0.0, CROSSFADE_SECONDS);
+          fadeChannel(nextChannel, 0.0, 1.0, CROSSFADE_SECONDS);
+
+          // Stop old channel after fade
+          setTimeout(() => {
+            stopChannel(activeChannel);
+            if (activeChannel === 0 && channelA) {
+              channelA.audio.pause();
+              channelA.audio = null;
+            } else if (activeChannel === 1 && channelB) {
+              channelB.audio.pause();
+              channelB.audio = null;
+            }
+
+            activeChannel = nextChannel;
+            currentTrackIdx = nextTrackIdx;
+            updateDisplay(currentTrackIdx, false);
+
+            // Schedule next
+            scheduleNext();
+          }, CROSSFADE_SECONDS * 1000);
+
+        }, (SECONDS_PER_TRACK - CROSSFADE_SECONDS) * 1000);
+      }
+
+      // Start first track
+      channelA = playTrackOnChannel(0, 0);
+      channelA.audio.addEventListener('canplaythrough', () => {
+        channelA.audio.play();
+        updateDisplay(0, false);
+        startBarCounter();
+        scheduleNext();
+      }, { once: true });
+    }
+
+    document.getElementById('start').addEventListener('click', async () => {
+      try {
+        statusEl.innerHTML = 'Initializing...';
+        await initDSP();
+        await cycleTracks();
+      } catch (e) {
+        statusEl.innerHTML = 'ERROR: ' + e.message;
+        statusEl.style.color = '#f00';
+        console.error(e);
+      }
+    });
+  </script>
+</body>
+</html>
