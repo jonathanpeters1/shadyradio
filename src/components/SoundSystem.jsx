@@ -93,6 +93,11 @@ export default function SoundSystem() {
   const audioRafRef     = useRef(0)
   const isPlayingRef    = useRef(false)
 
+  // Autonomous Shady commentary refs
+  const prevActiveChannelRef = useRef(-1)
+  const autoShadyTimerRef    = useRef(null)
+  const lastAutoShadyRef     = useRef(0)
+
   // sync ref on every render — no stale closure in RAF loops
   isPlayingRef.current = isPlaying
 
@@ -131,6 +136,16 @@ export default function SoundSystem() {
         }
         return next;
       });
+
+      // Detect active channel change (crossfade completed) for Shady commentary
+      const prevCh = prevActiveChannelRef.current
+      if (activeCh !== prevCh && prevCh !== -1 && activeCh >= 0) {
+        // Active channel just changed — crossfade completed
+        prevActiveChannelRef.current = activeCh
+        setTimeout(() => autoShady('crossfade'), 800)  // brief delay so audio settles
+      } else if (prevCh === -1 && activeCh >= 0) {
+        prevActiveChannelRef.current = activeCh
+      }
     });
 
     return () => {
@@ -197,6 +212,37 @@ export default function SoundSystem() {
       cancelAnimationFrame(vuRafRef.current);
     };
   }, []);
+
+  // ── DSP mode presets (EQ + compression) ─────────────────────────
+  useEffect(() => {
+    if (!audioManager.wasmReady) return
+
+    const PRESETS = {
+      radio: { low: 0,    mid: 0,   high: 0,   threshold: -18, ratio: 4   },
+      club:  { low: 3.5,  mid: 0,   high: 2,   threshold: -12, ratio: 6   },
+      vocal: { low: -1.5, mid: 2.5, high: 0.5, threshold: -24, ratio: 2   },
+      skit:  { low: -3,   mid: 3,   high: 1,   threshold: -28, ratio: 1.5 },
+    }
+
+    const p = PRESETS[mixMode] || PRESETS.radio
+    for (let i = 0; i < 16; i++) {
+      audioManager.setChannelEQ(i, p.low, p.mid, p.high)
+      audioManager.setChannelCompression(i, p.threshold, p.ratio)
+    }
+  }, [mixMode])
+
+  // ── 4-minute ambient Shady commentary timer ────────────────────────
+  useEffect(() => {
+    if (!isPlaying) {
+      clearInterval(autoShadyTimerRef.current)
+      return
+    }
+    autoShadyTimerRef.current = setInterval(() => {
+      autoShady('ambient')
+    }, 4 * 60 * 1000)  // every 4 minutes
+
+    return () => clearInterval(autoShadyTimerRef.current)
+  }, [isPlaying, active, activeBpm])
 
   // ── audio engine ─────────────────────────────────────────────────────────
 
@@ -381,6 +427,33 @@ export default function SoundSystem() {
       }
     } catch { setShadyReply('') }
     finally { setShadyBusy(false) }
+  }
+
+  // ── Autonomous Shady commentary helpers ─────────────────────────────
+  function buildShadyContext(trigger) {
+    const genre = active ? GENRES.find(g => g.slug === active)?.name || active : 'the mix'
+    const bpmStr = activeBpm > 0 ? `${Math.round(activeBpm)} BPM` : ''
+    const bpmPart = bpmStr ? ` at ${bpmStr}` : ''
+
+    if (trigger === 'crossfade') {
+      return `[DJ commentary] You just dropped into ${genre}${bpmPart}. ` +
+             `The crowd is live. Give a short fierce DJ drop — one or two sentences max. ` +
+             `Stay in character. No hashtags.`
+    }
+    if (trigger === 'ambient') {
+      return `[DJ commentary] You're spinning ${genre}${bpmPart} and the floor is packed. ` +
+             `Say something iconic — one sentence, fierce, in the moment. No hashtags.`
+    }
+    return `[DJ commentary] ${genre}${bpmPart}. Say something.`
+  }
+
+  async function autoShady(trigger) {
+    if (shadyBusy || !isPlaying) return
+    const now = Date.now()
+    if (now - lastAutoShadyRef.current < 30000) return  // 30s minimum between auto lines
+    lastAutoShadyRef.current = now
+    const prompt = buildShadyContext(trigger)
+    sendToShady(prompt)
   }
 
   // vocal mode dims non-vocal genres
