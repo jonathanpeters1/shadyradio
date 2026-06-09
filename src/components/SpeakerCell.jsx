@@ -1,10 +1,13 @@
 import React from 'react'
 
-export default function SpeakerCell({ genre, idx = 0, active, bass, bandBass = 0, isPlaying, dimmed = false, onTap }) {
+export default function SpeakerCell({ genre, idx = 0, active, activeChannel, bass, bandBass = 0, isPlaying, dimmed = false, crossfadeProgress = 0, bpm = 0, onTap }) {
   const b = bandBass
   // Real cone excursion: tiny forward push (3-5% scale) + brightness spike as cone faces you
   const scale      = isPlaying ? 1 + b * 0.045 : 1
   const brightness = isPlaying ? 1 + b * 0.9   : 1   // center flares bright on each hit
+
+  // Show crossfade progress bar if this is the active channel and crossfading
+  const showProgress = active && crossfadeProgress > 0 && crossfadeProgress < 1;
 
   return (
     <button
@@ -29,8 +32,16 @@ export default function SpeakerCell({ genre, idx = 0, active, bass, bandBass = 0
         />
 
       </div>
-      <span className="ss-cell-label">{genre.name}</span>
+      <span className="ss-cell-label">
+        {genre.name}
+        {active && bpm > 0 && <span className="ss-cell-bpm">{Math.round(bpm)} BPM</span>}
+      </span>
       {active && <span className="ss-cell-dot" />}
+      {showProgress && (
+        <div className="ss-crossfade-bar">
+          <div className="ss-crossfade-fill" style={{ width: `${crossfadeProgress * 100}%` }} />
+        </div>
+      )}
     </button>
   )
 }

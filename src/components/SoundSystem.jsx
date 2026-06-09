@@ -5,6 +5,7 @@ import SFCamera from './SFCamera'
 import ShadyStage from './ShadyStage'
 import ShadyProps from './ShadyProps'
 import ChatPanel from './ChatPanel'
+import audioManager from '../utils/audioManager'
 import './SoundSystem.css'
 
 const GENRES = [
@@ -53,6 +54,7 @@ const VOCAL_SLUGS = new Set([
 
 export default function SoundSystem() {
   const [active, setActive]           = useState(null)
+  const [activeChannel, setActiveChannel] = useState(-1) // WASM active channel index
   const [isPlaying, setIsPlaying]     = useState(false)
   const [loadingAudio, setLoadingAudio] = useState(false)
   const [bass, setBass]               = useState(0)
@@ -69,6 +71,8 @@ export default function SoundSystem() {
   const [openBox, setOpenBox]         = useState(null)
   const [fxMode, setFxMode]           = useState(false)
   const [chatOpen, setChatOpen]       = useState(false)
+  const [crossfadeProgress, setCrossfadeProgress] = useState(0) // meter[18]
+  const [activeBpm, setActiveBpm]     = useState(120) // meter[19]
 
   const wsRef           = useRef(null)
   const mouthRafRef     = useRef(0)
@@ -81,64 +85,29 @@ export default function SoundSystem() {
   // sync ref on every render — no stale closure in RAF loops
   isPlayingRef.current = isPlaying
 
-  // ── sim loop (fallback when no real stream) ─────────────────────────────
+  // ── audio manager setup + meter bridge ─────────────────────────────
   useEffect(() => {
-    let ws = null, retry = null, simRaf = 0, simT = 0, wsConnected = false
+    // Set up meter callback from WASM engine
+    audioManager.onMeter((meters) => {
+      // meters[0-15] = channel RMS, [16] = active_channel, [17] = pending_channel
+      // [18] = crossfade_progress, [19] = active_bpm
+      const activeCh = Math.round(meters[16]);
+      setActiveChannel(activeCh);
+      setCrossfadeProgress(meters[18]);
+      setActiveBpm(meters[19]);
 
-    function startSim() {
-      if (wsConnected) return
-      const tick = () => {
-        simT += 0.016
-        // only run when no real stream is connected
-        if (!audioRef.current) {
-          if (isPlayingRef.current) {
-            setBass(Math.max(0, Math.sin(simT * 2.1) * 0.45 + Math.sin(simT * 5.3) * 0.15 + 0.28))
-          } else {
-            setBass(0)
-          }
-        }
-        simRaf = requestAnimationFrame(tick)
+      // Set bass from active channel's RMS (meter[activeCh])
+      if (activeCh >= 0 && activeCh < 16) {
+        setBass(meters[activeCh]);
       }
-      simRaf = requestAnimationFrame(tick)
-    }
-
-    function connect() {
-      try {
-        ws = new WebSocket('ws://localhost:8080')
-        wsRef.current = ws
-        ws.onopen = () => { wsConnected = true; cancelAnimationFrame(simRaf) }
-        ws.onmessage = (e) => {
-          const raw = e.data
-          if (raw.startsWith('METER:')) {
-            const vals = raw.slice(7).trim().split(/\s+/).map(Number)
-            if (vals.length >= 16) setBass(vals[0] ?? 0)
-          }
-        }
-        ws.onclose = () => { wsConnected = false; wsRef.current = null; startSim(); retry = setTimeout(connect, 2500) }
-        ws.onerror = () => ws?.close()
-      } catch { startSim() }
-    }
-
-    connect()
-    startSim()
+    });
 
     return () => {
-      if (retry) clearTimeout(retry)
-      cancelAnimationFrame(simRaf)
-      ws?.close()
-    }
-  }, [])
+      audioManager.destroy();
+    };
+  }, []);
 
   // ── audio engine ─────────────────────────────────────────────────────────
-
-  function stopAudio() {
-    cancelAnimationFrame(audioRafRef.current)
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.src = ''
-      audioRef.current = null
-    }
-  }
 
   async function fetchStreamUrls(slug) {
     const tag = GENRE_TAGS[slug] || 'house'
@@ -148,76 +117,49 @@ export default function SoundSystem() {
     return stations.map(s => s.url_resolved || s.url).filter(Boolean)
   }
 
-  async function playGenre(slug) {
-    stopAudio()
-    setBass(0)
+  async function playGenre(slug, channelIndex) {
     setLoadingAudio(true)
 
-    // AudioContext must be created inside user gesture (before any await)
-    if (!audioCtxRef.current) {
-      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    // Initialize audio manager on first play (needs user gesture)
+    if (!audioManager.audioContext) {
+      await audioManager.initialize();
     }
-    const actx = audioCtxRef.current
-    if (actx.state === 'suspended') actx.resume()
 
     try {
       const urls = await fetchStreamUrls(slug)
-
-      for (const rawUrl of urls.slice(0, 10)) {
-        try {
-          // proxy → same origin → crossOrigin works → Web Audio can analyse it
-          const proxyUrl = `/stream-proxy?url=${encodeURIComponent(rawUrl)}`
-          const audio = new Audio()
-          audio.crossOrigin = 'anonymous'
-          audio.preload = 'none'
-          audio.src = proxyUrl
-
-          // wire through analyser before play()
-          const analyser = actx.createAnalyser()
-          analyser.fftSize = 1024
-          analyser.smoothingTimeConstant = 0.75
-          const src = actx.createMediaElementSource(audio)
-          src.connect(analyser)
-          analyser.connect(actx.destination)
-
-          await audio.play()
-          audioRef.current = audio
-          setLoadingAudio(false)
-
-          // read bass from actual waveform every frame
-          const buf = new Uint8Array(analyser.frequencyBinCount)
-          const tick = () => {
-            audioRafRef.current = requestAnimationFrame(tick)
-            analyser.getByteFrequencyData(buf)
-            // bass = bins 0–8% of spectrum (sub bass + kick drum)
-            const end = Math.max(1, Math.floor(buf.length * 0.08))
-            let sum = 0
-            for (let i = 0; i < end; i++) sum += buf[i]
-            setBass(Math.min(1, (sum / end) / 150))
-          }
-          tick()
-
-          audio.onerror = () => { stopAudio(); setIsPlaying(false); setActive(null) }
-          return
-        } catch { continue }
+      if (urls.length > 0) {
+        // Use proxy URL for CORS
+        const proxyUrl = `/stream-proxy?url=${encodeURIComponent(urls[0])}`;
+        audioManager.play(channelIndex, proxyUrl);
+        setLoadingAudio(false);
       }
-    } catch {}
-
-    setLoadingAudio(false)
-    // all streams failed — sim drives animation as fallback
+    } catch {
+      setLoadingAudio(false);
+    }
   }
 
   // ── genre tap ─────────────────────────────────────────────────────────────
   function tapGenre(slug) {
+    const channelIndex = GENRES.findIndex(g => g.slug === slug);
+    if (channelIndex < 0) return;
+
     if (active === slug) {
-      stopAudio()
-      setActive(null)
-      setIsPlaying(false)
+      // Stop this channel
+      audioManager.stop(channelIndex);
+      setActive(null);
+      setIsPlaying(false);
     } else {
-      // speakers start pumping via sim immediately while stream loads
-      setActive(slug)
-      setIsPlaying(true)
-      playGenre(slug)
+      // Stop any currently playing channel
+      if (active) {
+        const prevChannel = GENRES.findIndex(g => g.slug === active);
+        if (prevChannel >= 0) {
+          audioManager.stop(prevChannel);
+        }
+      }
+      // Start new channel
+      setActive(slug);
+      setIsPlaying(true);
+      playGenre(slug, channelIndex);
     }
   }
 
@@ -392,12 +334,15 @@ export default function SoundSystem() {
               genre={g}
               idx={i}
               active={active === g.slug}
+              activeChannel={activeChannel}
               bass={isPlaying ? bass : 0}
               bandBass={isPlaying ? bass : 0}
               treble={isPlaying ? treble : 0}
               isPlaying={isPlaying}
               fxMode={fxMode}
               dimmed={g.dimmed}
+              crossfadeProgress={crossfadeProgress}
+              bpm={activeChannel === i ? activeBpm : 0}
               onTap={() => !gridMode && tapGenre(g.slug)}
             />
           ))}

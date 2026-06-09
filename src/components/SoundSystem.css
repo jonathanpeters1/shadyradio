@@ -175,6 +175,26 @@
   50%      { opacity: 0.4; transform: scale(0.7); }
 }
 
+/* ── crossfade progress bar ── */
+.ss-crossfade-bar {
+  position: absolute; bottom: 1.6rem; left: 0.35rem; right: 0.35rem;
+  height: 2px; background: rgba(0,0,0,0.5);
+  border-radius: 1px; overflow: hidden; z-index: 4;
+}
+.ss-crossfade-fill {
+  height: 100%; background: linear-gradient(90deg, #dc1e1e, #ff4444);
+  box-shadow: 0 0 4px rgba(220,30,30,0.8);
+  transition: width 0.05s linear;
+}
+
+/* ── BPM display on active speaker ── */
+.ss-cell-bpm {
+  display: inline-block; margin-left: 0.4rem;
+  font-size: 0.55rem; font-weight: 600;
+  color: #dc1e1e; opacity: 0.9;
+  text-shadow: 0 0 6px rgba(220,30,30,0.6);
+}
+
 /* ── 32-box modular overlay ── */
 .ss-box-grid {
   position: absolute;
