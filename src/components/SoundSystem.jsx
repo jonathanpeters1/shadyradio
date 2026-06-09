@@ -32,7 +32,12 @@ export default function SoundSystem() {
   const [channelRms, setChannelRms] = useState(Array(16).fill(0))
 
   // Track which channel index is currently active in WASM
-  const activeChRef = useRef(-1)
+  const activeChRef  = useRef(-1)
+  // Per-channel playlist cache so track-ended callback can queue next
+  const playlistsRef = useRef({})   // { slug: [track, ...] }
+  const activeRef    = useRef(null) // mirror of `active` for callbacks
+
+  useEffect(() => { activeRef.current = active }, [active])
 
   // Set up meter callback once
   useEffect(() => {
@@ -45,6 +50,27 @@ export default function SoundSystem() {
     return () => { audioManager.onMeterUpdate(null) }
   }, [])
 
+  // ── play one track on a channel, register next-track callback ─────────────
+  async function playTrackOnChannel(idx, slug, tracks) {
+    const track  = tracks[Math.floor(Math.random() * tracks.length)]
+    const buffer = await audioManager.fetchDecode(track.url)
+    audioManager.setMasterBpm(track.bpm)
+    audioManager.playBuffer(idx, buffer, null, track.gridOffsetSec || 0, track.bpm)
+
+    // When this track ends, auto-queue another from the same playlist
+    audioManager.onTrackEnded[idx] = () => {
+      // Only continue if this channel is still the active genre
+      if (activeRef.current !== slug) {
+        audioManager.onTrackEnded[idx] = null
+        return
+      }
+      const list = playlistsRef.current[slug]
+      if (list && list.length > 0) {
+        playTrackOnChannel(idx, slug, list).catch(console.error)
+      }
+    }
+  }
+
   // ── tap a genre button ────────────────────────────────────────────────────
   async function tapGenre(slug) {
     const idx = GENRES.findIndex(g => g.slug === slug)
@@ -52,6 +78,7 @@ export default function SoundSystem() {
 
     // If this genre is already playing, stop it
     if (active === slug) {
+      audioManager.onTrackEnded[idx] = null
       audioManager.stop(idx)
       setActive(null)
       return
@@ -60,7 +87,10 @@ export default function SoundSystem() {
     // Stop whatever was playing
     if (active !== null) {
       const prevIdx = GENRES.findIndex(g => g.slug === active)
-      if (prevIdx >= 0) audioManager.stop(prevIdx)
+      if (prevIdx >= 0) {
+        audioManager.onTrackEnded[prevIdx] = null
+        audioManager.stop(prevIdx)
+      }
     }
 
     setLoading(true)
@@ -69,24 +99,17 @@ export default function SoundSystem() {
     try {
       await audioManager.initialize()
 
-      // Fetch playlist from audio-server
-      const res = await fetch(`/api/playlist/${slug}`)
-      if (!res.ok) throw new Error(`Playlist fetch failed (${res.status})`)
-      const tracks = await res.json()
-      if (!tracks || tracks.length === 0) throw new Error('No tracks in playlist')
+      // Fetch playlist from audio-server (cache it)
+      let tracks = playlistsRef.current[slug]
+      if (!tracks) {
+        const res = await fetch(`/api/playlist/${slug}`)
+        if (!res.ok) throw new Error(`Playlist fetch failed (${res.status})`)
+        tracks = await res.json()
+        if (!tracks || tracks.length === 0) throw new Error('No tracks in playlist')
+        playlistsRef.current[slug] = tracks
+      }
 
-      // Pick a random track
-      const track = tracks[Math.floor(Math.random() * tracks.length)]
-
-      // Fetch + decode the audio
-      const buffer = await audioManager.fetchDecode(track.url)
-
-      // Set master BPM to this track's BPM
-      audioManager.setMasterBpm(track.bpm)
-
-      // Play it — start at bar 1 (gridOffsetSec)
-      audioManager.playBuffer(idx, buffer, null, track.gridOffsetSec || 0, track.bpm)
-
+      await playTrackOnChannel(idx, slug, tracks)
       setActive(slug)
     } catch (e) {
       console.error('[SoundSystem] tapGenre error:', e)

@@ -31,6 +31,9 @@ class AudioManager {
       bpm:      null,
     }))
 
+    // Per-channel "track ended" callbacks — set by SoundSystem for continuous play
+    this.onTrackEnded = Array(16).fill(null)   // cb(channelIndex)
+
     this._masterBpm  = null
     this._wakeLock   = null
   }
@@ -209,9 +212,12 @@ class AudioManager {
     const data = ch.buffer.getChannelData(0)
     for (let c = 0; c < count; c++) {
       if (ch.offset >= data.length) {
-        // Track ended — stop channel
+        // Track ended — fire callback so SoundSystem can queue the next track
         ch.active = false
-        this.workletNode.port.postMessage({ type: 'stop-channel', channel: channelIndex })
+        ch.buffer = null
+        const cb = this.onTrackEnded[channelIndex]
+        if (cb) cb(channelIndex)
+        else this.workletNode.port.postMessage({ type: 'stop-channel', channel: channelIndex })
         return
       }
       const end   = Math.min(ch.offset + CHUNK_SIZE, data.length)
