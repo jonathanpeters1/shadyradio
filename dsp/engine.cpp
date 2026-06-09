@@ -140,7 +140,7 @@ extern int get_channel_key(int channel);
 extern void set_channel_key(int channel, int camelot_key);
 
 static float g_channel_bpm_hint[16] = {};  // 0 = no hint
-static int   g_channel_key_hint[16] = {};  // -1 = unknown
+int   g_channel_key_hint[16] = {};  // -1 = unknown, accessible to automix.cpp
 
 void set_channel_bpm(int ch, float bpm) {
   if (ch < 0 || ch >= 16) return;
@@ -154,8 +154,6 @@ void set_channel_bpm(int ch, float bpm) {
 void set_channel_key(int ch, int camelot_key) {
   if (ch < 0 || ch >= 16) return;
   g_channel_key_hint[ch] = camelot_key;
-  // Also set in automix system for harmonic scoring
-  ::set_channel_key(ch, camelot_key);
 }
 
 int get_channel_key_hint(int ch) {

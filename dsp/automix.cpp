@@ -28,11 +28,14 @@ namespace {
   };
 
   // Per-channel musical key (Camelot wheel 1A-12B, stored as 0-23)
-  // For now, keys are randomly assigned or could be loaded from metadata
+  // Default keys, overridden by pre-analyzed hints from engine.cpp
   static int g_channel_keys[MAX_CHANNELS] = {
     0, 5, 10, 3, 8, 1, 6, 11, 4, 9, 2, 7,
     12, 17, 22, 15  // Second set of keys for channels 12-15
   };
+
+// External key hints from engine.cpp (set via set_channel_key from JS)
+extern int g_channel_key_hint[];
 
   // Channel energy history for scoring
   struct EnergyHistory {
@@ -180,15 +183,19 @@ void reset_automix() {
 }
 
 // Set channel key (for harmonic compatibility)
-void set_channel_key(int channel, int camelot_key) {
+static void automix_set_channel_key(int channel, int camelot_key) {
   if (channel >= 0 && channel < MAX_CHANNELS && camelot_key >= 0 && camelot_key < 24) {
     g_channel_keys[channel] = camelot_key;
   }
 }
 
-// Get channel key
+// Get channel key (prefer pre-analyzed hint from engine.cpp if available)
 int get_channel_key(int channel) {
   if (channel >= 0 && channel < MAX_CHANNELS) {
+    // Check if there's a pre-analyzed key hint (non-zero = valid Camelot key)
+    if (g_channel_key_hint[channel] > 0) {
+      return g_channel_key_hint[channel];
+    }
     return g_channel_keys[channel];
   }
   return 0;
