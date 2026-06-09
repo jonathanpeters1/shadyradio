@@ -99,7 +99,7 @@ class AudioManager {
       this.wasmBuffer = await wasmResponse.arrayBuffer();
 
       // Load AudioWorklet
-      await this.audioContext.audioWorklet.addModule('/src/audio/engine.worklet.js');
+      await this.audioContext.audioWorklet.addModule('/audio/engine.worklet.js');
 
       // Create worklet node with 16 inputs, 1 stereo output
       this.workletNode = new AudioWorkletNode(this.audioContext, 'sf-engine', {
@@ -172,8 +172,15 @@ class AudioManager {
       console.log('AudioManager initialized');
       return this.audioContext;
     } catch (error) {
-      console.error('Failed to initialize AudioManager:', error);
-      throw error;
+      console.error('[SF] AudioManager init failed:', error);
+      // Fallback: keep AudioContext alive so direct audio play still works
+      // (no DSP processing, but sound comes out)
+      if (this.audioContext && !this.workletNode) {
+        console.warn('[SF] Running without WASM DSP — direct output only');
+        this.fallbackMode = true;
+      } else {
+        throw error;
+      }
     }
   }
 
@@ -223,10 +230,23 @@ class AudioManager {
     }
 
     // Create MediaElementAudioSourceNode
-    channel.sourceNode = this.audioContext.createMediaElementSource(audio);
+    try {
+      channel.sourceNode = this.audioContext.createMediaElementSource(audio);
+    } catch (e) {
+      // CORS: station doesn't allow Web Audio tap — play directly without DSP
+      console.warn(`[SF] Ch${channelIndex} CORS blocked, playing direct:`, e.message);
+      audio.crossOrigin = null;
+      audio.play().catch(() => {});
+      this.acquireWakeLock();
+      return;
+    }
 
-    // Connect to worklet input[channelIndex]
-    channel.sourceNode.connect(this.workletNode, 0, channelIndex);
+    // Connect through WASM worklet, or direct to destination in fallback mode
+    if (this.workletNode && !this.fallbackMode) {
+      channel.sourceNode.connect(this.workletNode, 0, channelIndex);
+    } else {
+      channel.sourceNode.connect(this.masterAnalyser || this.audioContext.destination);
+    }
 
     // Activate channel in WASM
     if (this.wasmReady) {
