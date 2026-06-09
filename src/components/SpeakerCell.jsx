@@ -9,6 +9,7 @@ export default function SpeakerCell({
   bandBass = 0,
   isPlaying,
   dimmed = false,
+  pending = false,
   crossfadeProgress = 0,
   bpm = 0,
   bpmLocked = false,
@@ -35,7 +36,7 @@ export default function SpeakerCell({
 
   return (
     <button
-      className={`ss-cell ${active ? 'ss-cell--active' : ''} ${dimmed ? 'ss-cell--dimmed' : ''}`}
+      className={`ss-cell ${active ? 'ss-cell--active' : ''} ${dimmed ? 'ss-cell--dimmed' : ''} ${pending ? 'ss-cell--pending' : ''}`}
       onClick={onTap}
     >
       <div className="ss-cell-img-wrap">

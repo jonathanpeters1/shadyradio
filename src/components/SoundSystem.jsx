@@ -73,6 +73,7 @@ export default function SoundSystem() {
   const [chatOpen, setChatOpen]       = useState(false)
   const [crossfadeProgress, setCrossfadeProgress] = useState(0) // meter[18]
   const [activeBpm, setActiveBpm]     = useState(120) // meter[19]
+  const [pendingChannel, setPendingChannel] = useState(-1) // meter[17]
   const [channelData, setChannelData] = useState(Array(16).fill({
     bpm: 0,
     bpmLocked: false,
@@ -102,13 +103,17 @@ export default function SoundSystem() {
       // meters[0-15] = channel RMS, [16] = active_channel, [17] = pending_channel
       // [18] = crossfade_progress, [19] = active_bpm
       const activeCh = Math.round(meters[16]);
+      const pendingCh = Math.round(meters[17]);
       setActiveChannel(activeCh);
+      setPendingChannel(pendingCh);
       setCrossfadeProgress(meters[18]);
       setActiveBpm(meters[19]);
 
       // Set bass from active channel's RMS (meter[activeCh])
       if (activeCh >= 0 && activeCh < 16) {
         setBass(meters[activeCh]);
+        // treble proxy: active channel RMS peaks drive high-freq shimmer
+        setTreble(meters[activeCh] * 2.5);
       }
 
       // Update per-channel data (BPM will be tracked per channel from WASM in future)
@@ -394,7 +399,22 @@ export default function SoundSystem() {
       <div className="ss-canvas" ref={canvasAreaRef}>
         {cameraOn && <SFCamera active={cameraOn} onMotion={() => {}} />}
 
-        <div className="ss-hero-layer" />
+        <div className="ss-hero-layer">
+          {activeBpm > 0 && (
+            <div className="ss-hero-bpm">
+              <span className="ss-hero-bpm-number">{Math.round(activeBpm)}</span>
+              <span className="ss-hero-bpm-label">BPM</span>
+              {crossfadeProgress > 0 && crossfadeProgress < 1 && (
+                <div className="ss-hero-xfade">
+                  <div
+                    className="ss-hero-xfade-fill"
+                    style={{ width: `${crossfadeProgress * 100}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="ss-particle-layer">
           <SFParticleField
@@ -435,6 +455,7 @@ export default function SoundSystem() {
               bpmLocked={channelData[i].bpmLocked}
               keyLabel={channelData[i].keyLabel}
               phrasePhase={channelData[i].phrasePhase}
+              pending={pendingChannel === i && crossfadeProgress > 0 && crossfadeProgress < 1}
               onTap={() => !gridMode && tapGenre(g.slug)}
             />
           ))}
