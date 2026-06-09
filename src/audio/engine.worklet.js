@@ -37,27 +37,20 @@ class SFEngineProcessor extends AudioWorkletProcessor {
   process(inputs, outputs, parameters) {
     if (!wasmReady) return true
 
-    const input = inputs[0]
     const output = outputs[0]
-    if (!input || !output) return true
+    if (!output) return true
 
-    const heap = new Uint8Array(wasm.env.memory.buffer)
-    const heap32 = new Float32Array(wasm.env.memory.buffer)
+    const heap32 = new Float32Array(wasm.memory.buffer)
     const inOff = inputPtr >> 2
     const outOff = outputPtr >> 2
 
-    // Copy input channels to WASM (16 channels max)
+    // Copy input channels to WASM — each source is a separate input, read ch[0]
     for (let ch = 0; ch < 16; ch++) {
-      const inputChannel = input[ch]
+      const inputChannel = inputs[ch]?.[0]
       if (inputChannel) {
-        for (let i = 0; i < bufferSize; i++) {
-          heap32[inOff + ch * bufferSize + i] = inputChannel[i]
-        }
+        heap32.set(inputChannel, inOff + ch * bufferSize)
       } else {
-        // Silence missing channels
-        for (let i = 0; i < bufferSize; i++) {
-          heap32[inOff + ch * bufferSize + i] = 0
-        }
+        heap32.fill(0, inOff + ch * bufferSize, inOff + (ch + 1) * bufferSize)
       }
     }
 
