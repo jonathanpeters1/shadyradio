@@ -108,6 +108,7 @@ extern int g_channel_key_hint[];
     // Crossfade timing
     float crossfade_start_time = 0.0f;
     float crossfade_duration = 0.0f;
+    float last_crossfade_end_time = -999.0f;  // prevents back-to-back fades
 
     // Sample counter for timing
     int samples_processed = 0;
@@ -234,7 +235,8 @@ float score_channel(int candidate, int current, float current_time) {
   score += std::min(energy_score, 1.0f) * 0.25f;
 
   // === HARMONIC COMPATIBILITY (0.30 weight) ===
-  float harmonic_score = harmonic_compatibility(g_channel_keys[current], g_channel_keys[candidate]);
+  // Use get_channel_key() so pre-analyzed hints from JS are respected
+  float harmonic_score = harmonic_compatibility(get_channel_key(current), get_channel_key(candidate));
   score += harmonic_score * 0.30f;
 
   // === TEMPO PROXIMITY (0.25 weight) ===
@@ -360,6 +362,7 @@ void execute_crossfade(float current_time) {
         g_automix.pending_channel = -1;
         g_automix.crossfade_state = IDLE;
         g_automix.crossfade_progress = 0.0f;
+        g_automix.last_crossfade_end_time = current_time;
 
         // New active channel at full gain
         g_channel_gains[g_automix.active_channel] = 1.0f;
@@ -396,7 +399,13 @@ void process_automix(const float* channel_rms, int num_channels, int samples_pro
 
   // Check if we need to select a new pending channel
   // This happens when we're in IDLE and phrase phase is approaching threshold
-  if (g_automix.crossfade_state == IDLE && g_automix.pending_channel < 0) {
+  // Enforce 2-bar minimum cooldown after a crossfade completes
+  float bpm = get_channel_bpm(g_automix.active_channel);
+  float bar_duration = (bpm > 0) ? (4.0f * 60.0f / bpm) : 2.0f;
+  float cooldown = bar_duration * 2.0f;
+  bool past_cooldown = (current_time - g_automix.last_crossfade_end_time) > cooldown;
+
+  if (g_automix.crossfade_state == IDLE && g_automix.pending_channel < 0 && past_cooldown) {
     float phrase_phase = get_channel_phrase_phase(g_automix.active_channel);
     // Start looking for next channel when we're past 50% of phrase
     if (phrase_phase > 0.5f) {
