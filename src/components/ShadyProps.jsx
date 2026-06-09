@@ -132,7 +132,7 @@ export default function ShadyProps({ isActive }) {
         // position: lower-right corner of stage, like she's holding it
         const cx = w * 0.76
         const cy = h * 0.82
-        drawFan(ctx, cx, cy, fan.openAng, fan.rot, fan.opacity)
+        drawFan(cx, cy, fan.openAng, fan.rot, fan.opacity)
       }
     }
 
