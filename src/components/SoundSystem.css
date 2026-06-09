@@ -117,8 +117,8 @@
 }
 
 .ss-cell--active::after {
-  border-color: rgba(220,30,30,0.20);
-  box-shadow: inset 0 0 0 1px rgba(220,30,30,0.08);
+  border-color: rgba(212,166,79,0.45);
+  box-shadow: inset 0 0 8px rgba(212,166,79,0.12);
 }
 
 .ss-cell-img-wrap {

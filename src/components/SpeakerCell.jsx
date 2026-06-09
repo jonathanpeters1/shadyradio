@@ -18,10 +18,16 @@ export default function SpeakerCell({
   phrasePhase = 0,
   onTap
 }) {
-  const b = bandBass
-  // Real cone excursion: tiny forward push (3-5% scale) + brightness spike as cone faces you
-  const scale      = isPlaying ? 1 + b * 0.045 : 1
-  const brightness = isPlaying ? 1 + b * 0.9   : 1   // center flares bright on each hit
+  // Normalize raw RMS (0.001–0.15) to pump drive 0–1
+  const b = Math.min(1, bandBass * 8)
+  // Per-speaker variety so cones don't all move identically
+  const variety = 0.55 + ((idx * 37 + 3) % 10) * 0.05
+  const scale      = isPlaying ? 1 + b * 0.09 * variety : 1
+  const brightness = isPlaying ? 1 + b * 2.4 * variety : 1
+
+  // Active speaker: ambient gold glow that breathes with the beat
+  const glowPx = active ? (isPlaying ? 16 + b * 38 : 16) : 0
+  const glowA  = active ? (isPlaying ? 0.28 + b * 0.52 : 0.22) : 0
 
   // Show crossfade progress bar if this is the active channel and crossfading
   const showCrossfade = active && crossfadeProgress > 0 && crossfadeProgress < 1
@@ -39,6 +45,7 @@ export default function SpeakerCell({
     <button
       className={`ss-cell ${active ? 'ss-cell--active' : ''} ${dimmed ? 'ss-cell--dimmed' : ''} ${pending ? 'ss-cell--pending' : ''} ${shadow ? 'ss-cell--shadow' : ''}`}
       onClick={onTap}
+      style={active ? { boxShadow: `0 0 ${glowPx.toFixed(1)}px rgba(212,166,79,${glowA.toFixed(2)})` } : undefined}
     >
       <div className="ss-cell-img-wrap">
 
