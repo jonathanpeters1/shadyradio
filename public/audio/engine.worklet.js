@@ -98,6 +98,21 @@ class SFEngineProcessor extends AudioWorkletProcessor {
         case 'set-bpm-hint':     wasm?._set_channel_bpm(d.channel, d.value); break
         case 'set-key-hint':     wasm?._set_channel_key(d.channel, d.value); break
         case 'reset-beat-tracker': wasm?._reset_beat_tracker(d.channel); break
+        
+        case 'set-downbeats': {
+          // Copy downbeats array to WASM heap
+          if (wasm && d.downbeats && d.downbeats.length > 0) {
+            const heap = new Float32Array(wasm.memory.buffer)
+            const ptr = wasm._malloc(d.downbeats.length * 4)  // 4 bytes per float
+            const offset = ptr >> 2
+            for (let i = 0; i < d.downbeats.length; i++) {
+              heap[offset + i] = d.downbeats[i]
+            }
+            wasm._set_channel_downbeats(d.channel, ptr, d.downbeats.length)
+            wasm._free(ptr)
+          }
+          break
+        }
       }
     }
   }

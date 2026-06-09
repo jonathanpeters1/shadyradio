@@ -11,6 +11,10 @@ extern int get_channel_bpm_locked(int channel);
 // External key hints from engine.cpp (set via set_channel_key from JS)
 extern int g_channel_key_hint[16];
 
+// External downbeat grid access from engine.cpp
+extern int get_channel_downbeat_count(int channel);
+extern float get_channel_downbeat_at(int channel, int index);
+
 namespace {
   static const int MAX_CHANNELS = 16;
   static const int ENERGY_HISTORY_SIZE = 8;
@@ -315,11 +319,32 @@ void execute_crossfade(float current_time) {
           g_automix.crossfade_state = CROSSFADING;
           g_automix.crossfade_start_time = current_time;
 
-          // Calculate duration: 8 bars at current BPM
-          float bpm = get_channel_bpm(g_automix.active_channel);
-          float beat_duration = 60.0f / bpm;
-          float bar_duration = beat_duration * BEATS_PER_BAR;
-          g_automix.crossfade_duration = bar_duration * BARS_PER_CROSSFADE;
+          // Calculate duration: 8 bars using real downbeat grid if available
+          int active_ch = g_automix.active_channel;
+          int db_count = get_channel_downbeat_count(active_ch);
+          
+          if (db_count >= BARS_PER_CROSSFADE + 1) {
+            // Use real downbeat positions from C++ analysis
+            // Find current bar position in the grid
+            int current_bar = 0;
+            for (int i = 0; i < db_count; i++) {
+              float db_time = get_channel_downbeat_at(active_ch, i);
+              if (db_time <= current_time) current_bar = i;
+              else break;
+            }
+            
+            // Calculate duration from current bar to +8 bars ahead
+            int end_bar = std::min(current_bar + BARS_PER_CROSSFADE, db_count - 1);
+            float start_db = get_channel_downbeat_at(active_ch, current_bar);
+            float end_db = get_channel_downbeat_at(active_ch, end_bar);
+            g_automix.crossfade_duration = end_db - start_db;
+          } else {
+            // Fallback to BPM calculation if no downbeat grid
+            float bpm = get_channel_bpm(active_ch);
+            float beat_duration = 60.0f / bpm;
+            float bar_duration = beat_duration * BEATS_PER_BAR;
+            g_automix.crossfade_duration = bar_duration * BARS_PER_CROSSFADE;
+          }
 
           g_automix.crossfade_progress = 0.0f;
 

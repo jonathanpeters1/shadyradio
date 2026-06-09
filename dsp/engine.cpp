@@ -165,6 +165,10 @@ static float g_channel_bpm_hint[16] = {};  // 0 = no hint
 // Global key hint array - defined here, accessed by automix.cpp
 int g_channel_key_hint[16] = {};  // -1 = unknown, accessible to automix.cpp
 
+// Global downbeat grid storage (per channel)
+#include <vector>
+static std::vector<float> g_channel_downbeats[16];  // downbeat times in seconds
+
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
@@ -192,6 +196,29 @@ int get_channel_key_hint(int ch) {
 EMSCRIPTEN_KEEPALIVE
 void set_automix_bypass(int bypass) {
   set_automix_bypass_internal(bypass);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void set_channel_downbeats(int ch, const float* downbeats_sec, int count) {
+  if (ch < 0 || ch >= 16) return;
+  g_channel_downbeats[ch].clear();
+  g_channel_downbeats[ch].reserve(count);
+  for (int i = 0; i < count; i++) {
+    g_channel_downbeats[ch].push_back(downbeats_sec[i]);
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE
+int get_channel_downbeat_count(int ch) {
+  if (ch < 0 || ch >= 16) return 0;
+  return static_cast<int>(g_channel_downbeats[ch].size());
+}
+
+EMSCRIPTEN_KEEPALIVE
+float get_channel_downbeat_at(int ch, int index) {
+  if (ch < 0 || ch >= 16) return 0.0f;
+  if (index < 0 || index >= static_cast<int>(g_channel_downbeats[ch].size())) return 0.0f;
+  return g_channel_downbeats[ch][index];
 }
 
 } // extern "C"

@@ -62,53 +62,48 @@ class AudioManager {
     this.wetGain.gain.value = 0
     this.convolver = this._createReverb()
 
-    // Load WASM
-    const wasmRes = await fetch('/dsp/engine.wasm')
-    this.wasmBuffer = await wasmRes.arrayBuffer()
-
-    // Load worklet
-    await this.audioContext.audioWorklet.addModule('/audio/engine.worklet.js')
-
-    // Create worklet node — no audio inputs, one stereo output
-    this.workletNode = new AudioWorkletNode(this.audioContext, 'sf-engine', {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [2],
-      processorOptions: { sampleRate: this.audioContext.sampleRate },
-    })
-
-    // Wire: worklet → dry+wet → analyser → destination
-    this.workletNode.connect(this.dryGain)
-    this.workletNode.connect(this.convolver)
-    this.convolver.connect(this.wetGain)
-    this.dryGain.connect(this.masterAnalyser)
-    this.wetGain.connect(this.masterAnalyser)
+    // Always connect masterAnalyser → destination first
+    // so GridTool's direct-deck playback works even if WASM fails
     this.masterAnalyser.connect(this.audioContext.destination)
 
-    // Message handler
-    this.workletNode.port.onmessage = (e) => {
-      const d = e.data
-      if (d.type === 'wasm-ready') {
-        this.wasmReady = true
-        console.log('[AudioManager] WASM ready')
-        // Activate all 16 channels
-        for (let i = 0; i < 16; i++) {
-          this.workletNode.port.postMessage({ type: 'set-active', channel: i, value: 1 })
-        }
-      } else if (d.type === 'meters') {
-        if (this.meterCallback) this.meterCallback(d.meters)
-      } else if (d.type === 'need-more') {
-        // Worklet ring is running low — push more PCM
-        this._pushNextChunk(d.channel)
-      } else if (d.type === 'error') {
-        console.error('[AudioManager] WASM error:', d.message)
-      } else if (d.type === 'log') {
-        console.warn('[worklet]', d.msg)
-      }
-    }
+    // Load WASM + worklet (non-fatal — GridTool bypasses worklet entirely)
+    try {
+      const wasmRes = await fetch('/dsp/engine.wasm')
+      this.wasmBuffer = await wasmRes.arrayBuffer()
+      await this.audioContext.audioWorklet.addModule('/audio/engine.worklet.js')
 
-    // Boot WASM in worklet
-    this.workletNode.port.postMessage({ type: 'init-wasm', buffer: this.wasmBuffer })
+      this.workletNode = new AudioWorkletNode(this.audioContext, 'sf-engine', {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+        processorOptions: { sampleRate: this.audioContext.sampleRate },
+      })
+
+      this.workletNode.connect(this.dryGain)
+      this.workletNode.connect(this.convolver)
+      this.convolver.connect(this.wetGain)
+      this.dryGain.connect(this.masterAnalyser)
+      this.wetGain.connect(this.masterAnalyser)
+
+      this.workletNode.port.onmessage = (e) => {
+        const d = e.data
+        if (d.type === 'wasm-ready') {
+          this.wasmReady = true
+          for (let i = 0; i < 16; i++)
+            this.workletNode.port.postMessage({ type: 'set-active', channel: i, value: 1 })
+        } else if (d.type === 'meters') {
+          if (this.meterCallback) this.meterCallback(d.meters)
+        } else if (d.type === 'need-more') {
+          this._pushNextChunk(d.channel)
+        } else if (d.type === 'error') {
+          console.error('[AudioManager] WASM error:', d.message)
+        }
+      }
+
+      this.workletNode.port.postMessage({ type: 'init-wasm', buffer: this.wasmBuffer })
+    } catch (e) {
+      console.warn('[AudioManager] WASM worklet unavailable, running in direct-decode mode:', e.message)
+    }
 
     try {
       if (navigator.wakeLock) this._wakeLock = await navigator.wakeLock.request('screen')
@@ -158,6 +153,23 @@ class AudioManager {
 
   async preload(urls) {
     return Promise.all(urls.map(u => this.fetchDecode(u).catch(() => null)))
+  }
+
+  // Queue a decoded buffer onto a channel — appended after whatever is already playing.
+  // The channel stays active; PCM is just pushed into the ring.
+  queueBuffer(channelIndex, buffer, offsetSec = 0) {
+    if (!this.audioContext || !this.workletNode) return
+    const ch = this.channels[channelIndex]
+    const data = buffer.getChannelData(0)
+    const offsetSamples = Math.max(0, Math.floor((offsetSec || 0) * buffer.sampleRate))
+
+    // Push all samples from this buffer directly into the worklet ring
+    const CHUNK = 16384
+    for (let i = offsetSamples; i < data.length; i += CHUNK) {
+      const end = Math.min(i + CHUNK, data.length)
+      const pcm = new Float32Array(data.slice(i, end))
+      this.workletNode.port.postMessage({ type: 'push-pcm', channel: channelIndex, pcm }, [pcm.buffer])
+    }
   }
 
   // ── Playback ──────────────────────────────────────────────────────────────
@@ -350,6 +362,25 @@ class AudioManager {
   setChannelCompression(channelIndex, threshold, ratio) {
     if (!this.workletNode) return
     this.workletNode.port.postMessage({ type: 'set-compression', channel: channelIndex, threshold, ratio })
+  }
+
+  // Set track metadata (BPM, key, downbeats) for a channel
+  // metadata = { bpm, key, downbeats: [seconds...] }
+  setChannelMetadata(channelIndex, metadata) {
+    if (!this.workletNode) return
+    if (metadata.bpm) {
+      this.workletNode.port.postMessage({ type: 'set-bpm-hint', channel: channelIndex, value: metadata.bpm })
+    }
+    if (metadata.key !== undefined) {
+      this.workletNode.port.postMessage({ type: 'set-key-hint', channel: channelIndex, value: metadata.key })
+    }
+    if (metadata.downbeats && metadata.downbeats.length > 0) {
+      this.workletNode.port.postMessage({ 
+        type: 'set-downbeats', 
+        channel: channelIndex, 
+        downbeats: metadata.downbeats 
+      })
+    }
   }
 
   // ── Meters ────────────────────────────────────────────────────────────────
