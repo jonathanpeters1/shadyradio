@@ -14,6 +14,11 @@ extern float process_master_limiter(float sample);
 extern void cleanup_dynamics_system();
 extern void set_channel_compression_internal(int channel, float threshold_db, float ratio);
 
+// Internal beat tracker functions
+extern void init_beat_tracker(int sample_rate, int buffer_size);
+extern void process_beat_tracker(int channel, const float* samples, int num_samples);
+extern void reset_beat_tracker(int channel);
+
 static int   g_sample_rate  = 44100;
 static int   g_buffer_size  = 128;
 static float g_input[16 * 128]  = {};
@@ -26,27 +31,36 @@ void init_engine(int sample_rate, int buffer_size) {
   g_sample_rate = sample_rate;
   g_buffer_size = buffer_size;
   for (int i = 0; i < 16; i++) { g_gain[i] = 1.0f; g_active[i] = 0; }
-  
+
   // Initialize EQ system
   init_eq_system(sample_rate);
-  
+
   // Initialize dynamics system
   init_dynamics_system(sample_rate, buffer_size);
+
+  // Initialize beat tracking system
+  init_beat_tracker(sample_rate, buffer_size);
 }
 
 void process_audio() {
+  // Process beat tracking for all channels (on raw input before EQ)
+  for (int ch = 0; ch < 16; ch++) {
+    if (!g_active[ch]) continue;
+    process_beat_tracker(ch, g_input + ch * g_buffer_size, g_buffer_size);
+  }
+
   // Process all active channels through EQ and compression, then sum to stereo
   for (int s = 0; s < g_buffer_size; s++) {
     float sumL = 0, sumR = 0;
     for (int ch = 0; ch < 16; ch++) {
       if (!g_active[ch]) continue;
-      
+
       // Apply EQ to the input sample
       float sample = process_channel_eq(ch, g_input[ch * g_buffer_size + s]);
-      
+
       // Apply per-channel compression
       sample = process_channel_compressor(ch, sample);
-      
+
       // Apply gain and sum to stereo
       sample = sample * g_gain[ch];
       sumL += sample * 0.5f;
@@ -65,10 +79,12 @@ void process_audio() {
     }
     g_meter[ch] = sqrtf(rms / g_buffer_size);
   }
-  g_meter[16] = 0;  // active channel
-  g_meter[17] = -1; // pending channel
-  g_meter[18] = 0;  // crossfade progress
-  g_meter[19] = 120.0f; // BPM placeholder
+
+  // Update meter data for active channel (for automix visibility)
+  int active_ch = static_cast<int>(g_meter[16]);
+  if (active_ch >= 0 && active_ch < 16) {
+    g_meter[19] = get_channel_bpm(active_ch);
+  }
 }
 
 float* get_input_buffer()  { return g_input; }
@@ -82,7 +98,5 @@ void set_channel_compression(int ch, float threshold_db, float ratio) {
     set_channel_compression_internal(ch, threshold_db, ratio);
   }
 }
-float get_channel_bpm(int ch)          { return 120.0f; }
-float get_channel_beat_phase(int ch)   { return 0.0f; }
-float get_channel_phrase_phase(int ch) { return 0.0f; }
-int   get_channel_bpm_locked(int ch)   { return 0; }
+// get_channel_bpm, get_channel_beat_phase, get_channel_phrase_phase, get_channel_bpm_locked
+// are implemented in beat_tracker.cpp
