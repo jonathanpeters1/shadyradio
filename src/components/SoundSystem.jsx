@@ -195,12 +195,12 @@ export default function SoundSystem() {
 
   // ── audio engine ─────────────────────────────────────────────────────────
 
-  async function fetchStreamUrls(slug) {
-    const tag = GENRE_TAGS[slug] || 'house'
-    const url = `https://de1.api.radio-browser.info/json/stations/bytag/${encodeURIComponent(tag)}?limit=30&hidebroken=true&order=clickcount`
-    const res = await fetch(url)
-    const stations = await res.json()
-    return stations.map(s => s.url_resolved || s.url).filter(Boolean)
+  async function fetchR2Track(slug) {
+    // R2 public bucket URL pattern — falls back to local dev server
+    const base = import.meta.env.VITE_R2_BASE_URL || 'http://localhost:3003'
+    const res = await fetch(`${base}/api/random?genre=${encodeURIComponent(slug)}`)
+    const { url } = await res.json()
+    return url  // direct R2 signed URL, no proxy needed
   }
 
   async function playGenre(slug, channelIndex) {
@@ -212,11 +212,9 @@ export default function SoundSystem() {
     }
 
     try {
-      const urls = await fetchStreamUrls(slug)
-      if (urls.length > 0) {
-        // Use proxy URL for CORS
-        const proxyUrl = `/stream-proxy?url=${encodeURIComponent(urls[0])}`;
-        audioManager.play(channelIndex, proxyUrl);
+      const trackUrl = await fetchR2Track(slug)
+      if (trackUrl) {
+        audioManager.play(channelIndex, trackUrl);
         setLoadingAudio(false);
       }
     } catch {
@@ -255,12 +253,12 @@ export default function SoundSystem() {
       if (audioRef.current) audioRef.current.pause()
       setIsPlaying(false)
     } else {
-      if (audioRef.current) {
-        audioRef.current.play().catch(() => {})
-        setIsPlaying(true)
-      } else if (active) {
-        setIsPlaying(true)
-        playGenre(active)
+      if (active) {
+        const channelIndex = GENRES.findIndex(g => g.slug === active);
+        if (channelIndex >= 0) {
+          setIsPlaying(true)
+          playGenre(active, channelIndex)
+        }
       }
     }
   }
