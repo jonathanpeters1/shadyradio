@@ -102,6 +102,8 @@ class AudioManager {
         this._pushNextChunk(d.channel)
       } else if (d.type === 'error') {
         console.error('[AudioManager] WASM error:', d.message)
+      } else if (d.type === 'log') {
+        console.warn('[worklet]', d.msg)
       }
     }
 
@@ -219,6 +221,7 @@ class AudioManager {
       if (ch.offset >= data.length) {
         // Track ended — swap in preloaded next buffer if ready
         if (ch.nextBuffer) {
+          console.log(`[AM] ch${channelIndex} gapless swap → preloaded buffer ready`)
           ch.buffer     = ch.nextBuffer
           ch.offset     = ch.nextOffset
           ch.bpm        = ch.nextBpm
@@ -226,9 +229,7 @@ class AudioManager {
           ch.nextBpm    = null
           ch.nextOffset = 0
           ch.preloading = false
-          // Kick off preload of the track after next
           this._triggerPreload(channelIndex)
-          // Continue pushing from new buffer
           const d2  = ch.buffer.getChannelData(0)
           const end = Math.min(ch.offset + CHUNK_SIZE, d2.length)
           const pcm = new Float32Array(d2.slice(ch.offset, end))
@@ -236,7 +237,7 @@ class AudioManager {
           this.workletNode.port.postMessage({ type: 'push-pcm', channel: channelIndex, pcm }, [pcm.buffer])
           continue
         }
-        // No preloaded buffer — track ends; fire callback to load next
+        console.warn(`[AM] ch${channelIndex} track ended — NO preloaded buffer, firing onTrackEnded`)
         ch.active = false
         ch.buffer = null
         const cb = this.onTrackEnded[channelIndex]
@@ -262,15 +263,19 @@ class AudioManager {
     const ch = this.channels[channelIndex]
     if (ch.preloading || ch.nextBuffer) return
     const cb = this.onNeedPreload[channelIndex]
-    if (!cb) return
+    if (!cb) { console.warn(`[AM] ch${channelIndex} _triggerPreload — no onNeedPreload set`); return }
     ch.preloading = true
-    Promise.resolve(cb(channelIndex)).then(({ buffer, bpm, offsetSec }) => {
-      if (!ch.preloading) return  // cancelled (channel stopped)
+    console.log(`[AM] ch${channelIndex} preloading next track...`)
+    Promise.resolve(cb(channelIndex)).then(result => {
+      if (!result) { console.warn(`[AM] ch${channelIndex} preload cb returned null`); ch.preloading = false; return }
+      if (!ch.preloading) return
+      const { buffer, bpm, offsetSec } = result
       ch.nextBuffer  = buffer
       ch.nextBpm     = bpm
       ch.nextOffset  = Math.max(0, Math.floor((offsetSec || 0) * buffer.sampleRate))
       ch.preloading  = false
-    }).catch(() => { ch.preloading = false })
+      console.log(`[AM] ch${channelIndex} preload done — next buffer ${buffer.duration.toFixed(1)}s @ ${bpm}bpm`)
+    }).catch(e => { console.error(`[AM] ch${channelIndex} preload failed:`, e); ch.preloading = false })
   }
 
   // Stop a channel

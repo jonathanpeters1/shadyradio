@@ -120,11 +120,18 @@ class SFEngineProcessor extends AudioWorkletProcessor {
       if (r.active && ringAvailable(r) >= bufferSize) {
         ringPop(r, tmp)
         heap.set(tmp, inOff + ch * bufferSize)
-        // Signal end-of-buffer to JS when ring drops below 8192 samples (~185ms)
-        if (ringAvailable(r) < 8192) {
+        const avail = ringAvailable(r)
+        if (avail < 8192) {
           this.port.postMessage({ type: 'need-more', channel: ch })
         }
+        if (avail < bufferSize * 2) {
+          this.port.postMessage({ type: 'log', msg: `ch${ch} ring CRITICAL: ${avail} samples left` })
+        }
       } else {
+        if (r.active) {
+          this.port.postMessage({ type: 'log', msg: `ch${ch} UNDERRUN active=${r.active} avail=${ringAvailable(r)}` })
+          r.active = false  // stop spamming once empty
+        }
         heap.fill(0, inOff + ch * bufferSize, inOff + (ch + 1) * bufferSize)
       }
     }
