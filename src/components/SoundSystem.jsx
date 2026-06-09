@@ -109,10 +109,6 @@ export default function SoundSystem() {
   // PWA install prompt
   const [installPrompt, setInstallPrompt] = useState(null)
 
-  // Diagnostic overlay (dev only — tap logo 5x to toggle)
-  const [diagOpen, setDiagOpen] = useState(false)
-  const logoTapRef = useRef(0)
-
   // Show clock state
   const [setDuration, setSetDuration] = useState(0)
   const showStartRef = useRef(null)
@@ -1188,18 +1184,6 @@ export default function SoundSystem() {
         onClose={() => setProOpen(false)}
       />
 
-      {/* Diagnostic overlay (dev only — tap logo 5x to toggle) */}
-      {import.meta.env.DEV && diagOpen && (
-        <DiagPanel
-          meters={lastMeters}
-          activeChannel={activeChannel}
-          pendingChannel={pendingChannel}
-          crossfadeProgress={crossfadeProgress}
-          activeBpm={activeBpm}
-          shadowChannels={shadowChannels}
-          onClose={() => setDiagOpen(false)}
-        />
-      )}
 
     </div>
   )
