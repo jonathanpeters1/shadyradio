@@ -7,6 +7,13 @@ extern void init_eq_system(int sample_rate);
 extern float process_channel_eq(int channel, float sample);
 extern void reset_channel_eq(int channel);
 
+// Internal dynamics functions
+extern void init_dynamics_system(int sample_rate, int buffer_size);
+extern float process_channel_compressor(int channel, float sample);
+extern float process_master_limiter(float sample);
+extern void cleanup_dynamics_system();
+extern void set_channel_compression_internal(int channel, float threshold_db, float ratio);
+
 static int   g_sample_rate  = 44100;
 static int   g_buffer_size  = 128;
 static float g_input[16 * 128]  = {};
@@ -22,10 +29,13 @@ void init_engine(int sample_rate, int buffer_size) {
   
   // Initialize EQ system
   init_eq_system(sample_rate);
+  
+  // Initialize dynamics system
+  init_dynamics_system(sample_rate, buffer_size);
 }
 
 void process_audio() {
-  // Process all active channels through EQ, then sum to stereo
+  // Process all active channels through EQ and compression, then sum to stereo
   for (int s = 0; s < g_buffer_size; s++) {
     float sumL = 0, sumR = 0;
     for (int ch = 0; ch < 16; ch++) {
@@ -34,15 +44,19 @@ void process_audio() {
       // Apply EQ to the input sample
       float sample = process_channel_eq(ch, g_input[ch * g_buffer_size + s]);
       
+      // Apply per-channel compression
+      sample = process_channel_compressor(ch, sample);
+      
       // Apply gain and sum to stereo
       sample = sample * g_gain[ch];
       sumL += sample * 0.5f;
       sumR += sample * 0.5f;
     }
-    g_output[s]                 = tanhf(sumL * 1.5f) / tanhf(1.5f); // soft clip
-    g_output[g_buffer_size + s] = tanhf(sumR * 1.5f) / tanhf(1.5f);
+    // Apply master limiting and soft clipping
+    g_output[s]                 = process_master_limiter(sumL);
+    g_output[g_buffer_size + s] = process_master_limiter(sumR);
   }
-  // compute per-channel RMS (post-EQ)
+  // compute per-channel RMS (post-EQ, pre-compression for metering)
   for (int ch = 0; ch < 16; ch++) {
     float rms = 0;
     for (int s = 0; s < g_buffer_size; s++) {
@@ -63,6 +77,11 @@ float* get_meter_buffer()  { return g_meter; }
 
 void set_channel_active(int ch, int active) { if (ch>=0&&ch<16) g_active[ch]=active; }
 void set_channel_gain(int ch, float gain)   { if (ch>=0&&ch<16) g_gain[ch]=gain; }
+void set_channel_compression(int ch, float threshold_db, float ratio) {
+  if (ch >= 0 && ch < 16) {
+    set_channel_compression_internal(ch, threshold_db, ratio);
+  }
+}
 float get_channel_bpm(int ch)          { return 120.0f; }
 float get_channel_beat_phase(int ch)   { return 0.0f; }
 float get_channel_phrase_phase(int ch) { return 0.0f; }
