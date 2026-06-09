@@ -195,12 +195,14 @@ export default function SoundSystem() {
 
   // ── audio engine ─────────────────────────────────────────────────────────
 
-  async function fetchR2Track(slug) {
-    // R2 public bucket URL pattern — falls back to local dev server
-    const base = import.meta.env.VITE_R2_BASE_URL || 'http://localhost:3003'
-    const res = await fetch(`${base}/api/random?genre=${encodeURIComponent(slug)}`)
-    const { url } = await res.json()
-    return url  // direct R2 signed URL, no proxy needed
+  async function fetchStreamUrls(slug) {
+    const tag = GENRE_TAGS[slug] || slug
+    const res = await fetch(
+      `https://de1.api.radio-browser.info/json/stations/bytag/${encodeURIComponent(tag)}?limit=5&hidebroken=true&order=clickcount&reverse=true`
+    )
+    const stations = await res.json()
+    const station = stations.find(s => s.url_resolved) || stations[0]
+    return station?.url_resolved || null
   }
 
   async function playGenre(slug, channelIndex) {
@@ -212,9 +214,9 @@ export default function SoundSystem() {
     }
 
     try {
-      const trackUrl = await fetchR2Track(slug)
-      if (trackUrl) {
-        audioManager.play(channelIndex, trackUrl);
+      const url = await fetchStreamUrls(slug)
+      if (url) {
+        audioManager.play(channelIndex, url);
         setLoadingAudio(false);
       }
     } catch {
@@ -250,22 +252,25 @@ export default function SoundSystem() {
   // ── play / pause ──────────────────────────────────────────────────────────
   function togglePlay() {
     if (isPlaying) {
-      if (audioRef.current) audioRef.current.pause()
+      if (active) {
+        const ch = GENRES.findIndex(g => g.slug === active)
+        if (ch >= 0) audioManager.stop(ch)
+      }
       setIsPlaying(false)
     } else {
       if (active) {
-        const channelIndex = GENRES.findIndex(g => g.slug === active);
-        if (channelIndex >= 0) {
-          setIsPlaying(true)
-          playGenre(active, channelIndex)
-        }
+        const ch = GENRES.findIndex(g => g.slug === active)
+        if (ch >= 0) { setIsPlaying(true); playGenre(active, ch) }
       }
     }
   }
 
   // ── skip / stop ───────────────────────────────────────────────────────────
   function skipStop() {
-    stopAudio()
+    if (active) {
+      const ch = GENRES.findIndex(g => g.slug === active)
+      if (ch >= 0) audioManager.stop(ch)
+    }
     setActive(null)
     setIsPlaying(false)
   }
