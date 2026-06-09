@@ -12,12 +12,35 @@ class AudioManager {
     // Master output analyzer for VU meter
     this.masterAnalyser = null;
 
+    // FX chain (reverb)
+    this.fxEnabled = false;
+    this.dryGain = null;
+    this.wetGain = null;
+    this.convolver = null;
+
     // 16 channel slots
     this.channels = Array(16).fill(null).map(() => ({
       element: null,
       sourceNode: null,
       gainNode: null
     }));
+  }
+
+  // Create synthetic impulse response for reverb
+  _createReverb(duration = 2.2, decay = 2.0) {
+    const ctx = this.audioContext
+    const sr = ctx.sampleRate
+    const len = sr * duration
+    const buf = ctx.createBuffer(2, len, sr)
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch)
+      for (let i = 0; i < len; i++) {
+        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay)
+      }
+    }
+    const conv = ctx.createConvolver()
+    conv.buffer = buf
+    return conv
   }
 
   // Initialize AudioContext and AudioWorklet (call on first user gesture)
@@ -57,8 +80,20 @@ class AudioManager {
       this.masterAnalyser.fftSize = 256;
       this.masterAnalyser.smoothingTimeConstant = 0.3;
 
-      // Connect worklet to analyzer, then to destination
-      this.workletNode.connect(this.masterAnalyser);
+      // Set up FX chain (dry/wet reverb)
+      this.dryGain = this.audioContext.createGain()
+      this.wetGain = this.audioContext.createGain()
+      this.dryGain.gain.value = 1.0
+      this.wetGain.gain.value = 0.0   // FX off by default
+      this.convolver = this._createReverb()
+
+      // Connect: worklet → dry gain → analyser → destination
+      //                  └→ convolver → wet gain →┘
+      this.workletNode.connect(this.dryGain)
+      this.workletNode.connect(this.convolver)
+      this.convolver.connect(this.wetGain)
+      this.dryGain.connect(this.masterAnalyser)
+      this.wetGain.connect(this.masterAnalyser)
       this.masterAnalyser.connect(this.audioContext.destination);
 
       // Listen for worklet messages
@@ -316,11 +351,41 @@ class AudioManager {
     return [rmsL, rmsR];
   }
 
+  // Enable reverb FX (wetAmount 0.0-1.0)
+  enableFX(wetAmount = 0.35) {
+    if (!this.dryGain || !this.audioContext) return
+    this.fxEnabled = true
+    this.dryGain.gain.setTargetAtTime(0.72, this.audioContext.currentTime, 0.05)
+    this.wetGain.gain.setTargetAtTime(wetAmount, this.audioContext.currentTime, 0.05)
+  }
+
+  // Disable reverb FX
+  disableFX() {
+    if (!this.dryGain || !this.audioContext) return
+    this.fxEnabled = false
+    this.dryGain.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.05)
+    this.wetGain.gain.setTargetAtTime(0.0, this.audioContext.currentTime, 0.05)
+  }
+
   // Cleanup
   destroy() {
     // Disconnect all channels
     for (let i = 0; i < 16; i++) {
       this.stop(i);
+    }
+
+    // Disconnect FX chain
+    if (this.dryGain) {
+      this.dryGain.disconnect();
+      this.dryGain = null;
+    }
+    if (this.wetGain) {
+      this.wetGain.disconnect();
+      this.wetGain = null;
+    }
+    if (this.convolver) {
+      this.convolver.disconnect();
+      this.convolver = null;
     }
 
     if (this.masterAnalyser) {
@@ -341,6 +406,7 @@ class AudioManager {
     this.wasmReady = false;
     this.meterCallback = null;
     this.wasmBuffer = null;
+    this.fxEnabled = false;
   }
 }
 

@@ -5,6 +5,7 @@ import SFCamera from './SFCamera'
 import ShadyStage from './ShadyStage'
 import ShadyProps from './ShadyProps'
 import ChatPanel from './ChatPanel'
+import ProPanel from './ProPanel'
 import audioManager from '../audio/audioManager'
 import './SoundSystem.css'
 
@@ -80,6 +81,13 @@ export default function SoundSystem() {
     keyLabel: null,
     phrasePhase: 0
   }))
+
+  // Pro mixer panel state
+  const [proOpen, setProOpen]       = useState(false)
+  const [channelGains, setChannelGains] = useState(Array(16).fill(0))
+  const [channelEQs, setChannelEQs] = useState(
+    Array(16).fill(null).map(() => ({ low: 0, mid: 0, high: 0 }))
+  )
 
   // VU meter refs
   const vuCanvasRef = useRef(null)
@@ -456,6 +464,18 @@ export default function SoundSystem() {
     sendToShady(prompt)
   }
 
+  // ── Pro panel handlers ───────────────────────────────────────────────
+  function handleGainChange(idx, db) {
+    setChannelGains(prev => { const n = [...prev]; n[idx] = db; return n })
+    const linear = Math.pow(10, db / 20)
+    audioManager.setChannelGain(idx, linear)
+  }
+
+  function handleEQChange(idx, eq) {
+    setChannelEQs(prev => { const n = [...prev]; n[idx] = eq; return n })
+    audioManager.setChannelEQ(idx, eq.low, eq.mid, eq.high)
+  }
+
   // vocal mode dims non-vocal genres
   const visibleGenres = GENRES.map(g => ({
     ...g,
@@ -620,7 +640,8 @@ export default function SoundSystem() {
           </button>
 
           {/* pro */}
-          <button className="ss-btn ss-btn--labeled ss-btn--pro">
+          <button className={`ss-btn ss-btn--labeled ss-btn--pro ${proOpen ? 'ss-btn--pro-on' : ''}`}
+            onClick={() => setProOpen(v => !v)}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7z"/>
             </svg>
@@ -629,7 +650,12 @@ export default function SoundSystem() {
 
           {/* fx */}
           <button className={`ss-btn ss-btn--labeled ${fxMode ? 'ss-btn--fx-on' : ''}`}
-            onClick={() => setFxMode(v => !v)}>
+            onClick={() => {
+              const next = !fxMode
+              setFxMode(next)
+              if (next) audioManager.enableFX(0.35)
+              else audioManager.disableFX()
+            }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
             </svg>
@@ -711,6 +737,18 @@ export default function SoundSystem() {
         <div className="particle-burst"
           style={{ left: `${particleBurst.x}%`, top: `${particleBurst.y}%` }} />
       )}
+
+      {/* ── pro mixer panel ── */}
+      <ProPanel
+        isOpen={proOpen}
+        channels={GENRES}
+        channelGains={channelGains}
+        channelEQs={channelEQs}
+        activeChannel={activeChannel}
+        onGainChange={handleGainChange}
+        onEQChange={handleEQChange}
+        onClose={() => setProOpen(false)}
+      />
 
     </div>
   )
