@@ -27,6 +27,14 @@ class AudioManager {
       sourceNode: null,
       gainNode: null
     }));
+
+    // Channel error callbacks for stream recovery
+    this.channelErrorCallbacks = {}   // { channelIndex: callback }
+  }
+
+  // Register error handler for a specific channel
+  onChannelError(channelIndex, callback) {
+    this.channelErrorCallbacks[channelIndex] = callback
   }
 
   // Create synthetic impulse response for reverb
@@ -157,6 +165,24 @@ class AudioManager {
     audio.preload = 'none';
     audio.src = url;
     channel.element = audio;
+
+    // Stream error recovery handlers
+    audio.onerror = () => {
+      console.warn(`Channel ${channelIndex} stream error — signaling for retry`)
+      const cb = this.channelErrorCallbacks[channelIndex]
+      if (cb) cb(channelIndex)
+    }
+    audio.onstalled = () => {
+      // Stalled for more than 8 seconds = dead stream
+      const stalledTimer = setTimeout(() => {
+        if (channel.element === audio) {
+          console.warn(`Channel ${channelIndex} stalled — signaling for retry`)
+          const cb = this.channelErrorCallbacks[channelIndex]
+          if (cb) cb(channelIndex)
+        }
+      }, 8000)
+      audio.onprogress = () => clearTimeout(stalledTimer)
+    }
 
     // Create MediaElementAudioSourceNode
     channel.sourceNode = this.audioContext.createMediaElementSource(audio);

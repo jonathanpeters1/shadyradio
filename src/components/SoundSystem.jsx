@@ -90,6 +90,14 @@ export default function SoundSystem() {
     Array(16).fill(null).map(() => ({ low: 0, mid: 0, high: 0 }))
   )
 
+  // Show clock state
+  const [setDuration, setSetDuration] = useState(0)
+  const showStartRef = useRef(null)
+  const clockTimerRef = useRef(null)
+
+  // Shady history state
+  const [shadyHistory, setShadyHistory] = useState([])
+
   // VU meter refs
   const vuCanvasRef = useRef(null)
   const vuRafRef = useRef(0)
@@ -101,6 +109,9 @@ export default function SoundSystem() {
   const audioCtxRef     = useRef(null)
   const audioRafRef     = useRef(0)
   const isPlayingRef    = useRef(false)
+
+  // Stream retry recovery
+  const retryCountRef = useRef(Array(16).fill(0))
 
   // Autonomous Shady commentary refs
   const prevActiveChannelRef = useRef(-1)
@@ -161,6 +172,39 @@ export default function SoundSystem() {
       audioManager.destroy();
     };
   }, []);
+
+  // ── stream error recovery handlers ──────────────────────────────────
+  useEffect(() => {
+    for (let i = 0; i < 16; i++) {
+      audioManager.onChannelError(i, async (channelIndex) => {
+        const slug = GENRES[channelIndex]?.slug
+        if (!slug) return
+        const retries = retryCountRef.current[channelIndex]
+        if (retries >= 3) {
+          // Give up after 3 attempts — stop the channel
+          console.error(`Channel ${channelIndex} failed 3 times, stopping`)
+          audioManager.stop(channelIndex)
+          if (active === slug) {
+            setActive(null)
+            setIsPlaying(false)
+          }
+          retryCountRef.current[channelIndex] = 0
+          return
+        }
+        retryCountRef.current[channelIndex] = retries + 1
+        console.log(`Retrying channel ${channelIndex} (attempt ${retries + 1})`)
+        // Wait 1.5s then try a fresh stream URL
+        await new Promise(r => setTimeout(r, 1500))
+        try {
+          let url = await fetchR2Track(slug)
+          if (!url) url = await fetchStreamUrls(slug)
+          if (url) audioManager.play(channelIndex, url)
+        } catch (e) {
+          console.error('Retry failed:', e)
+        }
+      })
+    }
+  }, [])
 
   // ── VU meter animation loop ───────────────────────────────────────
   useEffect(() => {
@@ -253,6 +297,20 @@ export default function SoundSystem() {
     return () => clearInterval(autoShadyTimerRef.current)
   }, [isPlaying, active, activeBpm])
 
+  // ── show clock (set duration) ───────────────────────────────────────
+  useEffect(() => {
+    if (isPlaying) {
+      clockTimerRef.current = setInterval(() => {
+        if (showStartRef.current) {
+          setSetDuration(Math.floor((Date.now() - showStartRef.current) / 1000))
+        }
+      }, 1000)
+    } else {
+      clearInterval(clockTimerRef.current)
+    }
+    return () => clearInterval(clockTimerRef.current)
+  }, [isPlaying])
+
   // ── audio engine ─────────────────────────────────────────────────────────
 
   async function fetchR2Track(slug) {
@@ -317,7 +375,17 @@ export default function SoundSystem() {
       // Start new channel
       setActive(slug);
       setIsPlaying(true);
+
+      // Initialize show clock on first play
+      if (!showStartRef.current) {
+        showStartRef.current = Date.now()
+        setTimeout(() => autoShady('intro'), 3000)  // 3s after first drop
+      }
+
       playGenre(slug, channelIndex);
+
+      // Reset retry count on successful play
+      retryCountRef.current[channelIndex] = 0
     }
   }
 
@@ -371,6 +439,12 @@ export default function SoundSystem() {
       const { reply } = await res.json()
       if (!reply || reply.trim() === '.') { setShadyReply(''); return }
       setShadyReply(reply)
+
+      // Add to Shady history (keep last 3)
+      setShadyHistory(prev => {
+        const next = [...prev, { text: reply, ts: Date.now() }]
+        return next.slice(-3)
+      })
 
       const words = reply.split(' ')
       const wordAnimations = words.map((word, index) => {
@@ -442,18 +516,46 @@ export default function SoundSystem() {
   function buildShadyContext(trigger) {
     const genre = active ? GENRES.find(g => g.slug === active)?.name || active : 'the mix'
     const bpmStr = activeBpm > 0 ? `${Math.round(activeBpm)} BPM` : ''
-    const bpmPart = bpmStr ? ` at ${bpmStr}` : ''
+    const setTime = setDuration > 0 ? formatDuration(setDuration) : null
+    const setPhase = !setTime ? 'opening' :
+                     setDuration < 600 ? 'first ten minutes' :
+                     setDuration < 1800 ? 'mid-set' :
+                     setDuration < 3600 ? 'deep in the set' : 'marathon set territory'
+    const energy = activeBpm > 135 ? 'peak energy' :
+                   activeBpm > 122 ? 'building' :
+                   activeBpm > 110 ? 'warm' : 'slow burn'
 
+    const base = [
+      genre && `Genre: ${genre}`,
+      bpmStr && `BPM: ${bpmStr}`,
+      `Energy: ${energy}`,
+      setTime && `Set time: ${setTime} (${setPhase})`,
+    ].filter(Boolean).join(' | ')
+
+    if (trigger === 'intro') {
+      return `[DJ set opening] You just started spinning. Genre: ${genre}. ` +
+             `The doors just opened, the floor is still filling in. ` +
+             `Give a fierce welcome — two sentences max. In character. No hashtags.`
+    }
     if (trigger === 'crossfade') {
-      return `[DJ commentary] You just dropped into ${genre}${bpmPart}. ` +
-             `The crowd is live. Give a short fierce DJ drop — one or two sentences max. ` +
-             `Stay in character. No hashtags.`
+      return `[DJ crossfade] ${base}. ` +
+             `You just dropped into a new track. Short fierce transition drop — ` +
+             `one sentence. Stay in character.`
     }
     if (trigger === 'ambient') {
-      return `[DJ commentary] You're spinning ${genre}${bpmPart} and the floor is packed. ` +
-             `Say something iconic — one sentence, fierce, in the moment. No hashtags.`
+      return `[DJ ambient commentary] ${base}. ` +
+             `The crowd is locked in. Say something iconic — one sentence, right now. No hashtags.`
     }
-    return `[DJ commentary] ${genre}${bpmPart}. Say something.`
+    return `[DJ] ${base}. Say something.`
+  }
+
+  // Format duration as MM:SS or H:MM:SS
+  function formatDuration(secs) {
+    const h = Math.floor(secs / 3600)
+    const m = Math.floor((secs % 3600) / 60)
+    const s = secs % 60
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
   }
 
   async function autoShady(trigger) {
@@ -519,6 +621,22 @@ export default function SoundSystem() {
               {activeBpm > 0 && (
                 <span className="ss-np-bpm">{Math.round(activeBpm)} BPM</span>
               )}
+              {setDuration > 0 && (
+                <span className="ss-np-clock">{formatDuration(setDuration)}</span>
+              )}
+            </div>
+          )}
+
+          {/* Shady history strip */}
+          {shadyHistory.length > 0 && (
+            <div className="ss-shady-history">
+              {shadyHistory.map((line, i) => (
+                <div key={line.ts}
+                  className="ss-shady-history-line"
+                  style={{ opacity: 0.25 + (i / shadyHistory.length) * 0.65 }}>
+                  {line.text}
+                </div>
+              ))}
             </div>
           )}
 
