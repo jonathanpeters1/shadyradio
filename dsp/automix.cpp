@@ -119,6 +119,9 @@ namespace {
   // Helper: Camelot wheel harmonic compatibility (0.0-1.0)
   // Keys stored as 0-23 (1A=0, 1B=1, 2A=2, ..., 12B=23)
   float harmonic_compatibility(int key1, int key2) {
+    // If either key is unknown, give neutral score
+    if (key1 < 0 || key2 < 0) return 0.5f;
+
     // Convert to wheel position (0-11 for A/B separately)
     int a1 = key1 / 2;  // 0-11 position on wheel
     int b1 = key1 % 2;  // 0=A, 1=B (major/minor)
@@ -132,15 +135,20 @@ namespace {
     // Same key
     if (key1 == key2) return 1.0f;
 
-    // Adjacent on wheel (same A/B)
-    if (dist == 1 && b1 == b2) return 1.0f;
+    // Relative major/minor (same wheel number, different mode)
+    if (a1 == a2 && b1 != b2) return 0.85f;
 
-    // +7 semitones (relative major/minor) - opposite wheel position
-    // 1A ↔ 1B, 2A ↔ 2B, etc.
-    if (a1 == a2 && b1 != b2) return 0.8f;
+    // Adjacent on wheel (same mode)
+    if (dist == 1 && b1 == b2) return 0.80f;
+
+    // Adjacent, different mode
+    if (dist == 1) return 0.65f;
+
+    // Two steps apart
+    if (dist == 2) return 0.40f;
 
     // Everything else
-    return 0.2f;
+    return 0.10f;
   }
 
   // Helper: Get current time in seconds

@@ -178,7 +178,7 @@ class AudioManager {
   }
 
   // Play a stream on a specific channel (creates/connects HTMLAudioElement internally)
-  play(channelIndex, url) {
+  play(channelIndex, url, meta = null) {
     if (channelIndex < 0 || channelIndex >= 16) {
       console.error('Invalid channel index:', channelIndex);
       return;
@@ -239,6 +239,16 @@ class AudioManager {
 
     // Start playing
     audio.play().catch(err => console.error('Play error on channel', channelIndex, err));
+
+    // Seed WASM engine with metadata hints (if available)
+    if (this.wasmReady) {
+      if (meta?.bpm) {
+        this.setChannelBpmHint(channelIndex, meta.bpm)
+      }
+      if (meta?.camelot) {
+        this.setChannelKeyHint(channelIndex, meta.camelot)
+      }
+    }
 
     // Prevent device sleep while audio is playing
     this.acquireWakeLock()
@@ -349,6 +359,30 @@ class AudioManager {
     // volume 0.0-1.0 — controls HTMLAudioElement output level
     const ch = this.channels[index]
     if (ch?.element) ch.element.volume = Math.max(0, Math.min(1, volume))
+  }
+
+  // Seed WASM engine with pre-analyzed BPM hint (instant beat lock)
+  setChannelBpmHint(index, bpm) {
+    if (index < 0 || index >= 16) return
+    if (!this.workletNode || !this.wasmReady) return
+    this.workletNode.port.postMessage({
+      type: 'set-bpm-hint', channel: index, value: bpm
+    })
+  }
+
+  // Seed WASM engine with pre-analyzed Camelot key (harmonic scoring)
+  setChannelKeyHint(index, camelotStr) {
+    // Convert "8A" → integer encoded as (num * 2) + mode, 0=A 1=B
+    if (!camelotStr || index < 0 || index >= 16) return
+    if (!this.workletNode || !this.wasmReady) return
+    const match = camelotStr.match(/^(\d+)([AB])$/)
+    if (!match) return
+    const num  = parseInt(match[1])   // 1-12
+    const mode = match[2] === 'B' ? 1 : 0
+    const encoded = num * 2 + mode
+    this.workletNode.port.postMessage({
+      type: 'set-key-hint', channel: index, value: encoded
+    })
   }
 
   // Set channel gain in dB

@@ -1,7 +1,7 @@
 /**
  * ShadyRadio API Worker
  * Serves random audio tracks from R2 bucket by genre
- * Falls back gracefully when tracks aren't available
+ * Returns BPM + Camelot key from manifest.json for each track
  */
 
 export default {
@@ -20,7 +20,7 @@ export default {
     }
 
     // GET /api/random?genre=<slug>
-    // Returns { url, key } for a random track in that genre folder
+    // Returns { url, key, bpm, camelot, energy, title, artist }
     if (url.pathname === '/api/random') {
       const genre = url.searchParams.get('genre')
       if (!genre) {
@@ -40,7 +40,20 @@ export default {
       const chosen = tracks[Math.floor(Math.random() * tracks.length)]
       const publicUrl = `${env.R2_PUBLIC_URL}/${chosen.key}`
 
-      return Response.json({ url: publicUrl, key: chosen.key, total: tracks.length }, { headers: cors })
+      // Look up metadata from manifest.json
+      const manifest = await getManifest(env)
+      const trackMeta = manifest?.genres?.[genre]?.find(t => chosen.key.endsWith(t.file.replace(`${genre}/`, '')))
+        || manifest?.genres?.[genre]?.find(t => t.file === chosen.key)
+
+      return Response.json({
+        url: publicUrl,
+        key: chosen.key,
+        bpm: trackMeta?.bpm || null,
+        camelot: trackMeta?.key || null,
+        energy: trackMeta?.energy || null,
+        title: trackMeta?.title || null,
+        artist: trackMeta?.artist || null,
+      }, { headers: cors })
     }
 
     // GET /api/genres — list available genre folders
@@ -51,5 +64,26 @@ export default {
     }
 
     return new Response('not found', { status: 404, headers: cors })
+  }
+}
+
+// Cache manifest in memory across requests
+let manifestCache = null
+let manifestCacheTime = 0
+
+async function getManifest(env) {
+  const now = Date.now()
+  // Refresh cache every 60 seconds
+  if (manifestCache && (now - manifestCacheTime) < 60000) {
+    return manifestCache
+  }
+  try {
+    const obj = await env.AUDIO_BUCKET.get('manifest.json')
+    if (!obj) return null
+    manifestCache = await obj.json()
+    manifestCacheTime = now
+    return manifestCache
+  } catch {
+    return null
   }
 }

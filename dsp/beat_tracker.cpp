@@ -301,3 +301,18 @@ int get_channel_bpm_locked(int channel) {
   if (channel < 0 || channel >= MAX_CHANNELS) return 0;
   return g_trackers[channel].bpm_locked ? 1 : 0;
 }
+
+// Seed beat tracker with known BPM (from pre-analyzed metadata)
+// Allows instant lock without 8-10 second warmup
+void seed_beat_tracker_bpm(int channel, float bpm) {
+  if (channel < 0 || channel >= MAX_CHANNELS) return;
+  if (bpm < 60.0f || bpm > 200.0f) return;
+  BeatTracker& t = g_trackers[channel];
+  t.bpm_estimate  = bpm;
+  t.bpm_ema       = bpm;
+  t.bpm_variance  = 0.5f;   // Below lock threshold — instant lock
+  t.bpm_locked    = true;
+  // Seed history so variance stays low
+  for (int i = 0; i < 80 && i < 100; i++) t.bpm_history[i] = bpm;
+  t.bpm_history_count = 80;
+}

@@ -247,9 +247,11 @@ export default function SoundSystem() {
         // Wait 1.5s then try a fresh stream URL
         await new Promise(r => setTimeout(r, 1500))
         try {
-          let url = await fetchR2Track(slug)
+          const r2 = await fetchR2Track(slug)
+          let url = r2.url
+          let meta = r2.meta
           if (!url) url = await fetchStreamUrls(slug)
-          if (url) audioManager.play(channelIndex, url)
+          if (url) audioManager.play(channelIndex, url, meta)
         } catch (e) {
           console.error('Retry failed:', e)
         }
@@ -486,14 +488,21 @@ export default function SoundSystem() {
 
   async function fetchR2Track(slug) {
     const base = import.meta.env.VITE_R2_BASE_URL || ''
-    if (!base) return null
+    if (!base) return { url: null, meta: null }
     try {
       const res = await fetch(`${base}/api/random?genre=${encodeURIComponent(slug)}`)
-      if (!res.ok) return null
+      if (!res.ok) return { url: null, meta: null }
       const data = await res.json()
-      return data.url || null
+      const meta = data.bpm || data.camelot ? {
+        bpm: data.bpm,
+        camelot: data.camelot,
+        energy: data.energy,
+        title: data.title,
+        artist: data.artist
+      } : null
+      return { url: data.url || null, meta }
     } catch {
-      return null
+      return { url: null, meta: null }
     }
   }
 
@@ -527,12 +536,14 @@ export default function SoundSystem() {
       const idx = GENRES.findIndex(g => g.slug === slug)
       if (idx < 0) continue
       try {
-        let url = await fetchR2Track(slug)
+        const r2 = await fetchR2Track(slug)
+        let url = r2.url
+        let meta = r2.meta
         if (!url) url = await fetchStreamUrls(slug)
         if (!url) continue
 
         // Play at volume 0 — silent to user, active in WASM
-        audioManager.play(idx, url)
+        audioManager.play(idx, url, meta)
         audioManager.setChannelVolume(idx, 0.0)
         newShadows.push(idx)
       } catch (e) {
@@ -558,9 +569,21 @@ export default function SoundSystem() {
     }
 
     try {
-      let url = await fetchR2Track(slug)   // Try R2 first
+      const r2 = await fetchR2Track(slug)   // Try R2 first
+      let url = r2.url
+      let meta = r2.meta
       if (!url) url = await fetchStreamUrls(slug)   // Radio Browser fallback
-      if (url) audioManager.play(channelIndex, url)
+      if (url) {
+        audioManager.play(channelIndex, url, meta)
+        // Store metadata for display (key badge)
+        if (meta?.camelot) {
+          setChannelData(prev => {
+            const next = [...prev]
+            next[channelIndex] = { ...next[channelIndex], keyLabel: meta.camelot }
+            return next
+          })
+        }
+      }
     } catch (e) {
       console.error('playGenre failed:', e)
     }

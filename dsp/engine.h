@@ -20,6 +20,11 @@ float get_channel_beat_phase(int channel);    // 0.0–1.0 within current beat
 float get_channel_phrase_phase(int channel);  // 0.0–1.0 within 8-bar phrase
 int   get_channel_bpm_locked(int channel);    // 1 if stable
 
+// Pre-analyzed BPM/key hints (from manifest.json)
+void  set_channel_bpm(int channel, float bpm);       // seed beat tracker with known BPM
+void  set_channel_key(int channel, int camelot_key);  // set Camelot key (0-23 encoded)
+int   get_channel_key_hint(int channel);              // get stored key
+
 #ifdef __cplusplus
 }
 #endif

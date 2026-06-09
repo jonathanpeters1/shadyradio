@@ -131,3 +131,34 @@ void set_channel_compression(int ch, float threshold_db, float ratio) {
 }
 // get_channel_bpm, get_channel_beat_phase, get_channel_phrase_phase, get_channel_bpm_locked
 // are implemented in beat_tracker.cpp
+
+// External seed function (beat_tracker.cpp)
+extern void seed_beat_tracker_bpm(int channel, float bpm);
+
+// Pre-analyzed key hints (automix.cpp)
+extern int get_channel_key(int channel);
+extern void set_channel_key(int channel, int camelot_key);
+
+static float g_channel_bpm_hint[16] = {};  // 0 = no hint
+static int   g_channel_key_hint[16] = {};  // -1 = unknown
+
+void set_channel_bpm(int ch, float bpm) {
+  if (ch < 0 || ch >= 16) return;
+  g_channel_bpm_hint[ch] = bpm;
+  // Seed the beat tracker with the known BPM so it locks immediately
+  if (bpm >= 60.0f && bpm <= 200.0f) {
+    seed_beat_tracker_bpm(ch, bpm);
+  }
+}
+
+void set_channel_key(int ch, int camelot_key) {
+  if (ch < 0 || ch >= 16) return;
+  g_channel_key_hint[ch] = camelot_key;
+  // Also set in automix system for harmonic scoring
+  ::set_channel_key(ch, camelot_key);
+}
+
+int get_channel_key_hint(int ch) {
+  if (ch < 0 || ch >= 16) return -1;
+  return g_channel_key_hint[ch];
+}
