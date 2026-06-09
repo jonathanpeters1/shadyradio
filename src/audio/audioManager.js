@@ -198,7 +198,12 @@ class AudioManager {
 
     const channel = this.channels[channelIndex];
 
-    // Disconnect previous source if any
+    // Stop and clean up previous element fully before replacing
+    if (channel.element) {
+      channel.element.pause();
+      channel.element.src = '';
+      channel.element = null;
+    }
     if (channel.sourceNode) {
       channel.sourceNode.disconnect();
       channel.sourceNode = null;
@@ -379,6 +384,15 @@ class AudioManager {
     // volume 0.0-1.0 — controls HTMLAudioElement output level
     const ch = this.channels[index]
     if (ch?.element) ch.element.volume = Math.max(0, Math.min(1, volume))
+
+    // Also set WASM gain since worklet gets audio before element volume
+    if (this.workletNode) {
+      this.workletNode.port.postMessage({
+        type: 'set-gain',
+        channel: index,
+        value: volume  // linear 0.0-1.0
+      })
+    }
   }
 
   // Seed WASM engine with pre-analyzed BPM hint (instant beat lock)
