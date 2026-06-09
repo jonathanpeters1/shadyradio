@@ -25,14 +25,19 @@ class AudioManager {
 
     // Per-channel state
     this.channels = Array.from({ length: 16 }, () => ({
-      buffer:   null,   // decoded AudioBuffer
-      offset:   0,      // current read position in samples
-      active:   false,
-      bpm:      null,
+      buffer:      null,   // decoded AudioBuffer currently playing
+      offset:      0,      // current read position in samples
+      active:      false,
+      bpm:         null,
+      nextBuffer:  null,   // pre-decoded next track (gapless handoff)
+      nextBpm:     null,
+      nextOffset:  0,
+      preloading:  false,  // fetch in flight
     }))
 
-    // Per-channel "track ended" callbacks — set by SoundSystem for continuous play
-    this.onTrackEnded = Array(16).fill(null)   // cb(channelIndex)
+    // Per-channel callbacks
+    this.onTrackEnded  = Array(16).fill(null)   // cb(channelIndex) — called when track ends
+    this.onNeedPreload = Array(16).fill(null)   // cb(channelIndex) → Promise<{buffer,bpm,offsetSec}>
 
     this._masterBpm  = null
     this._wakeLock   = null
@@ -212,7 +217,26 @@ class AudioManager {
     const data = ch.buffer.getChannelData(0)
     for (let c = 0; c < count; c++) {
       if (ch.offset >= data.length) {
-        // Track ended — fire callback so SoundSystem can queue the next track
+        // Track ended — swap in preloaded next buffer if ready
+        if (ch.nextBuffer) {
+          ch.buffer     = ch.nextBuffer
+          ch.offset     = ch.nextOffset
+          ch.bpm        = ch.nextBpm
+          ch.nextBuffer = null
+          ch.nextBpm    = null
+          ch.nextOffset = 0
+          ch.preloading = false
+          // Kick off preload of the track after next
+          this._triggerPreload(channelIndex)
+          // Continue pushing from new buffer
+          const d2  = ch.buffer.getChannelData(0)
+          const end = Math.min(ch.offset + CHUNK_SIZE, d2.length)
+          const pcm = new Float32Array(d2.slice(ch.offset, end))
+          ch.offset = end
+          this.workletNode.port.postMessage({ type: 'push-pcm', channel: channelIndex, pcm }, [pcm.buffer])
+          continue
+        }
+        // No preloaded buffer — track ends; fire callback to load next
         ch.active = false
         ch.buffer = null
         const cb = this.onTrackEnded[channelIndex]
@@ -220,30 +244,48 @@ class AudioManager {
         else this.workletNode.port.postMessage({ type: 'stop-channel', channel: channelIndex })
         return
       }
-      const end   = Math.min(ch.offset + CHUNK_SIZE, data.length)
-      const chunk = data.slice(ch.offset, end)
-      ch.offset   = end
-      // Transfer the underlying buffer for zero-copy
-      const pcm = new Float32Array(chunk)
-      this.workletNode.port.postMessage(
-        { type: 'push-pcm', channel: channelIndex, pcm },
-        [pcm.buffer]
-      )
+      const end = Math.min(ch.offset + CHUNK_SIZE, data.length)
+      const pcm = new Float32Array(data.slice(ch.offset, end))
+      ch.offset = end
+      this.workletNode.port.postMessage({ type: 'push-pcm', channel: channelIndex, pcm }, [pcm.buffer])
     }
   }
 
-  // Called when worklet signals ring is low — push enough to refill
+  // Called when worklet signals ring is low — push more and trigger preload
   _pushNextChunk(channelIndex) {
     this._pushChunks(channelIndex, 4)
+    this._triggerPreload(channelIndex)
+  }
+
+  // Start preloading the next track if not already doing so
+  _triggerPreload(channelIndex) {
+    const ch = this.channels[channelIndex]
+    if (ch.preloading || ch.nextBuffer) return
+    const cb = this.onNeedPreload[channelIndex]
+    if (!cb) return
+    ch.preloading = true
+    Promise.resolve(cb(channelIndex)).then(({ buffer, bpm, offsetSec }) => {
+      if (!ch.preloading) return  // cancelled (channel stopped)
+      ch.nextBuffer  = buffer
+      ch.nextBpm     = bpm
+      ch.nextOffset  = Math.max(0, Math.floor((offsetSec || 0) * buffer.sampleRate))
+      ch.preloading  = false
+    }).catch(() => { ch.preloading = false })
   }
 
   // Stop a channel
   stop(channelIndex) {
     const ch = this.channels[channelIndex]
     if (!ch) return
-    ch.active  = false
-    ch.buffer  = null
-    ch.offset  = 0
+    ch.active      = false
+    ch.buffer      = null
+    ch.offset      = 0
+    ch.nextBuffer  = null
+    ch.nextBpm     = null
+    ch.nextOffset  = 0
+    ch.preloading  = false
+    this.onTrackEnded[channelIndex]  = null
+    this.onNeedPreload[channelIndex] = null
     if (this.workletNode) {
       this.workletNode.port.postMessage({ type: 'stop-channel', channel: channelIndex })
     }

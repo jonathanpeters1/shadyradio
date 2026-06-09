@@ -50,24 +50,38 @@ export default function SoundSystem() {
     return () => { audioManager.onMeterUpdate(null) }
   }, [])
 
-  // ── play one track on a channel, register next-track callback ─────────────
-  async function playTrackOnChannel(idx, slug, tracks) {
-    const track  = tracks[Math.floor(Math.random() * tracks.length)]
+  // ── pick a random track from a playlist (not the same as current) ──────────
+  function pickTrack(tracks, excludeUrl = null) {
+    const pool = tracks.length > 1 ? tracks.filter(t => t.url !== excludeUrl) : tracks
+    return pool[Math.floor(Math.random() * pool.length)]
+  }
+
+  // ── start playing a channel with gapless preload loop ─────────────────────
+  async function playTrackOnChannel(idx, slug, tracks, track = null) {
+    if (!track) track = pickTrack(tracks)
     const buffer = await audioManager.fetchDecode(track.url)
     audioManager.setMasterBpm(track.bpm)
     audioManager.playBuffer(idx, buffer, null, track.gridOffsetSec || 0, track.bpm)
 
-    // When this track ends, auto-queue another from the same playlist
-    audioManager.onTrackEnded[idx] = () => {
-      // Only continue if this channel is still the active genre
-      if (activeRef.current !== slug) {
-        audioManager.onTrackEnded[idx] = null
-        return
-      }
+    // Register preload callback — fires when ring drops below 8192 samples
+    // (~185ms). Fetches + decodes the NEXT track so it's ready for gapless swap.
+    audioManager.onNeedPreload[idx] = async () => {
+      if (activeRef.current !== slug) return null
       const list = playlistsRef.current[slug]
-      if (list && list.length > 0) {
-        playTrackOnChannel(idx, slug, list).catch(console.error)
-      }
+      if (!list) return null
+      const next   = pickTrack(list, track.url)
+      const buf    = await audioManager.fetchDecode(next.url)
+      // Update current track reference so the one after THAT is different
+      track = next
+      audioManager.setMasterBpm(next.bpm)
+      return { buffer: buf, bpm: next.bpm, offsetSec: next.gridOffsetSec || 0 }
+    }
+
+    // Fallback: if preload somehow didn't happen and the track truly ends
+    audioManager.onTrackEnded[idx] = () => {
+      if (activeRef.current !== slug) return
+      const list = playlistsRef.current[slug]
+      if (list) playTrackOnChannel(idx, slug, list).catch(console.error)
     }
   }
 
@@ -78,8 +92,7 @@ export default function SoundSystem() {
 
     // If this genre is already playing, stop it
     if (active === slug) {
-      audioManager.onTrackEnded[idx] = null
-      audioManager.stop(idx)
+      audioManager.stop(idx)   // stop() now clears onTrackEnded + onNeedPreload
       setActive(null)
       return
     }
@@ -87,10 +100,7 @@ export default function SoundSystem() {
     // Stop whatever was playing
     if (active !== null) {
       const prevIdx = GENRES.findIndex(g => g.slug === active)
-      if (prevIdx >= 0) {
-        audioManager.onTrackEnded[prevIdx] = null
-        audioManager.stop(prevIdx)
-      }
+      if (prevIdx >= 0) audioManager.stop(prevIdx)
     }
 
     setLoading(true)
