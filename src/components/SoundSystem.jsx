@@ -104,8 +104,12 @@ export default function SoundSystem() {
       if (!tracks) {
         const res = await fetch(`/api/playlist/${slug}`)
         if (!res.ok) throw new Error(`Playlist fetch failed (${res.status})`)
-        tracks = await res.json()
-        if (!tracks || tracks.length === 0) throw new Error('No tracks in playlist')
+        const raw = await res.json()
+        if (!raw || raw.length === 0) throw new Error('No tracks in playlist')
+        // Only use tracks with a valid analyzed BPM (60–200). Unanalyzed stubs
+        // have fake BPMs parsed from filename prefixes like "11211A" → 11211.
+        tracks = raw.filter(t => t.bpm >= 60 && t.bpm <= 200)
+        if (tracks.length === 0) throw new Error('No analyzed tracks in playlist yet — run audio-server analysis')
         playlistsRef.current[slug] = tracks
       }
 
