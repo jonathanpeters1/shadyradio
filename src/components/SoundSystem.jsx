@@ -109,9 +109,9 @@ export default function SoundSystem() {
   // PWA install prompt
   const [installPrompt, setInstallPrompt] = useState(null)
 
-  // Shadow channels (pre-loaded for automix crossfading)
-  const [shadowChannels, setShadowChannels] = useState([])
-  const shadowLoadingRef = useRef(false)
+  // Diagnostic overlay (dev only — tap logo 5x to toggle)
+  const [diagOpen, setDiagOpen] = useState(false)
+  const logoTapRef = useRef(0)
 
   // Show clock state
   const [setDuration, setSetDuration] = useState(0)
@@ -822,47 +822,6 @@ export default function SoundSystem() {
     sendToShady(prompt)
   }
 
-  // ── Shadow channel helpers ────────────────────────────────────────────────
-  function pickShadowGenres(activeSlug) {
-    const pool = GENRES.filter(g => g.slug !== activeSlug)
-    const activeIdx = GENRES.findIndex(g => g.slug === activeSlug)
-    const similar  = GENRES[(activeIdx + 2) % GENRES.length]
-    const contrast = GENRES[(activeIdx + 8) % GENRES.length]
-    return [similar.slug, contrast.slug]
-  }
-
-  async function loadShadowChannels(activeSlug) {
-    if (shadowLoadingRef.current) return
-    shadowLoadingRef.current = true
-
-    const slugs = pickShadowGenres(activeSlug)
-    const newShadows = []
-
-    for (const slug of slugs) {
-      const idx = GENRES.findIndex(g => g.slug === slug)
-      if (idx < 0) continue
-      try {
-        let url = await fetchR2Track(slug)
-        if (!url) url = await fetchStreamUrls(slug)
-        if (!url) continue
-
-        audioManager.play(idx, url)
-        audioManager.setChannelVolume(idx, 0.0)
-        newShadows.push(idx)
-      } catch (e) {
-        console.warn('Shadow load failed for', slug, e)
-      }
-    }
-
-    setShadowChannels(newShadows)
-    shadowLoadingRef.current = false
-  }
-
-  function stopShadowChannels() {
-    shadowChannels.forEach(idx => audioManager.stop(idx))
-    setShadowChannels([])
-  }
-
   // ── Pro panel handlers ───────────────────────────────────────────────
   function handleGainChange(idx, db) {
     setChannelGains(prev => { const n = [...prev]; n[idx] = db; return n })
@@ -1228,6 +1187,19 @@ export default function SoundSystem() {
         onEQChange={handleEQChange}
         onClose={() => setProOpen(false)}
       />
+
+      {/* Diagnostic overlay (dev only — tap logo 5x to toggle) */}
+      {import.meta.env.DEV && diagOpen && (
+        <DiagPanel
+          meters={lastMeters}
+          activeChannel={activeChannel}
+          pendingChannel={pendingChannel}
+          crossfadeProgress={crossfadeProgress}
+          activeBpm={activeBpm}
+          shadowChannels={shadowChannels}
+          onClose={() => setDiagOpen(false)}
+        />
+      )}
 
     </div>
   )
