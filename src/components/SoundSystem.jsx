@@ -29,7 +29,7 @@ const GENRES = [
 const DECK_A = 0
 const DECK_B = 1
 const CROSSFADE_BARS  = 8    // how many bars the xfade lasts
-const MIX_POINT_BARS  = 32   // play this many bars before starting xfade
+const MIX_POINT_BARS  = 24   // play this many bars before starting xfade (~48s @ 120bpm)
 
 export default function SoundSystem() {
   const [active, setActive]         = useState(null)
@@ -125,19 +125,20 @@ export default function SoundSystem() {
     runningRef.current = true
     const tracks = await fetchPlaylist(slug)
 
-    // Pick first track → Deck A
+    // Pick and load first track → Deck A
     let trackA = pickTrack(tracks)
-    setNowPlaying(trackA.name.replace(/\.wav$/i,'').replace(/^\d+[A-Za-z#]*\s*[-–]\s*/,'').slice(0,60))
+    setNowPlaying(fmt(trackA.name))
     audioManager.setMasterBpm(trackA.bpm)
     await loadDeck(DECK_A, trackA)
     audioManager.setChannelVolume(DECK_A, 1)
     audioManager.setChannelVolume(DECK_B, 0)
     deckRef.current = DECK_A
 
-    // Pre-fetch Deck B while A plays
-    let trackB = pickTrack(tracks, trackA.url)
-    let bufBPromise = audioManager.fetchDecode(trackB.url)
-    setNextName(trackB.name.replace(/\.wav$/i,'').replace(/^\d+[A-Za-z#]*\s*[-–]\s*/,'').slice(0,60))
+    // Immediately start pre-fetching + decoding next track in background
+    let trackB  = pickTrack(tracks, trackA.url)
+    let nxtBuf  = audioManager.fetchDecode(trackB.url)  // Promise — decoding in bg
+    setNextName(fmt(trackB.name))
+    console.log(`[Mix] Pre-fetching next: ${fmt(trackB.name)}`)
 
     while (runningRef.current) {
       const outDeck  = deckRef.current
@@ -145,44 +146,45 @@ export default function SoundSystem() {
       const curTrack = outDeck === DECK_A ? trackA : trackB
       const nxtTrack = outDeck === DECK_A ? trackB : trackA
 
-      // Wait MIX_POINT_BARS bars at current BPM before crossfading
-      const barDur    = (60 / curTrack.bpm) * 4 * 1000
-      const waitMs    = barDur * MIX_POINT_BARS
-      console.log(`[Mix] Playing ${MIX_POINT_BARS} bars (${(waitMs/1000).toFixed(0)}s) before mix`)
+      const barDur   = (60 / curTrack.bpm) * 4 * 1000
+      const waitMs   = barDur * MIX_POINT_BARS
+      console.log(`[Mix] Deck ${outDeck === DECK_A ? 'A' : 'B'}: ${fmt(curTrack.name)} — waiting ${(waitMs/1000).toFixed(0)}s`)
       await sleep(waitMs)
       if (!runningRef.current) break
 
-      // Ensure incoming track buffer is decoded
-      await bufBPromise
-      audioManager.workletNode?.port.postMessage({ type: 'set-bpm-hint', channel: inDeck, value: nxtTrack.bpm })
+      // Block until next buffer is decoded (should already be done — 48s head start)
+      console.log(`[Mix] Awaiting decoded buffer for: ${fmt(nxtTrack.name)}`)
+      const inBuf = await nxtBuf
+      if (!runningRef.current) break
 
-      // Load incoming deck silently
-      const inBuf = await bufBPromise
+      // Load incoming deck silently at gridOffsetSec
       audioManager.workletNode?.port.postMessage({ type: 'set-active', channel: inDeck, value: 0 })
       audioManager.workletNode?.port.postMessage({ type: 'set-bpm-hint', channel: inDeck, value: nxtTrack.bpm })
       audioManager.playBuffer(inDeck, inBuf, null, nxtTrack.gridOffsetSec || 0, nxtTrack.bpm)
       audioManager.setChannelVolume(inDeck, 0)
+      setNowPlaying(fmt(nxtTrack.name))
 
-      setNowPlaying(nxtTrack.name.replace(/\.wav$/i,'').replace(/^\d+[A-Za-z#]*\s*[-–]\s*/,'').slice(0,60))
-
-      // Pick the track after that and start pre-fetching it
+      // Pick + start pre-fetching the track AFTER next immediately
       const afterTrack = pickTrack(tracks, nxtTrack.url)
-      bufBPromise = audioManager.fetchDecode(afterTrack.url)
-      setNextName(afterTrack.name.replace(/\.wav$/i,'').replace(/^\d+[A-Za-z#]*\s*[-–]\s*/,'').slice(0,60))
+      nxtBuf = audioManager.fetchDecode(afterTrack.url)
+      setNextName(fmt(afterTrack.name))
+      console.log(`[Mix] Pre-fetching after-next: ${fmt(afterTrack.name)}`)
 
-      // Do the crossfade
+      // Crossfade outgoing → incoming
       startCrossfade(outDeck, inDeck, curTrack.bpm)
-
-      // Wait for the crossfade to complete
-      const xfadeDur = (barDur * CROSSFADE_BARS)
+      const xfadeDur = barDur * CROSSFADE_BARS
       await sleep(xfadeDur + 100)
       if (!runningRef.current) break
 
-      // Swap deck reference and track references
+      // Swap
       deckRef.current = inDeck
       if (inDeck === DECK_A) { trackA = nxtTrack; trackB = afterTrack }
       else                   { trackB = nxtTrack; trackA = afterTrack }
     }
+  }
+
+  function fmt(name) {
+    return name.replace(/\.wav$/i,'').replace(/^\d+[A-Za-z#]*\s*[-–]\s*/,'').slice(0, 60)
   }
 
   function sleep(ms) {
