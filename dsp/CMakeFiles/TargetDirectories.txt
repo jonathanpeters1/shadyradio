@@ -1,0 +1,3 @@
+/Users/jp/shadyradio/web/dsp/CMakeFiles/engine.dir
+/Users/jp/shadyradio/web/dsp/CMakeFiles/edit_cache.dir
+/Users/jp/shadyradio/web/dsp/CMakeFiles/rebuild_cache.dir

@@ -1,4 +1,4 @@
-const CACHE = 'shadyradio-v2'
+const CACHE = 'shadyradio-v3'
 const PRECACHE = ['/', '/sf-logo.jpeg', '/woofer.png', '/dsp/engine.js', '/dsp/engine.wasm']
 
 self.addEventListener('install', e => {

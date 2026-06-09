@@ -156,6 +156,11 @@ export default function SoundSystem() {
 
   // ── audio manager setup + meter bridge ─────────────────────────────
   useEffect(() => {
+    // Debug refs to track state changes
+    const prevBpmRef = useRef(0)
+    const prevCrossfadeRef = useRef(0)
+    const crossfadeStartedRef = useRef(false)
+
     // Set up meter callback from WASM engine
     audioManager.onMeterUpdate((meters) => {
       // Store raw meter array for diagnostic panel
@@ -165,10 +170,28 @@ export default function SoundSystem() {
       // [18] = crossfade_progress, [19] = active_bpm
       const activeCh = Math.round(meters[16]);
       const pendingCh = Math.round(meters[17]);
+      const crossfadeProgress = meters[18];
+      const activeBpm = meters[19];
+
       setActiveChannel(activeCh);
       setPendingChannel(pendingCh);
-      setCrossfadeProgress(meters[18]);
-      setActiveBpm(meters[19]);
+      setCrossfadeProgress(crossfadeProgress);
+      setActiveBpm(activeBpm);
+
+      // Debug: BPM lock detection
+      if (activeBpm > 0 && prevBpmRef.current === 0 && activeCh >= 0) {
+        console.log(`[SF] BPM LOCKED on CH${activeCh}: ${activeBpm.toFixed(1)} BPM`)
+      }
+      prevBpmRef.current = activeBpm
+
+      // Debug: Crossfade detection
+      if (crossfadeProgress > 0 && !crossfadeStartedRef.current) {
+        console.log(`[SF] CROSSFADE START: ${activeCh} → ${pendingCh} (${activeBpm.toFixed(1)} BPM)`)
+        crossfadeStartedRef.current = true
+      } else if (crossfadeProgress === 0 && crossfadeStartedRef.current) {
+        console.log(`[SF] CROSSFADE COMPLETE: ${activeCh} is now active`)
+        crossfadeStartedRef.current = false
+      }
 
       // Set bass from active channel's RMS (meter[activeCh])
       if (activeCh >= 0 && activeCh < 16) {
@@ -185,9 +208,9 @@ export default function SoundSystem() {
         if (activeCh >= 0 && activeCh < 16) {
           next[activeCh] = {
             ...next[activeCh],
-            bpm: meters[19],
-            bpmLocked: meters[19] > 0, // Locked if we have a valid BPM
-            phrasePhase: meters[18] > 0 ? meters[18] : 0 // Use crossfade progress as proxy for now
+            bpm: activeBpm,
+            bpmLocked: activeBpm > 0, // Locked if we have a valid BPM
+            phrasePhase: crossfadeProgress > 0 ? crossfadeProgress : 0 // Use crossfade progress as proxy for now
           };
         }
         return next;
@@ -507,8 +530,13 @@ export default function SoundSystem() {
   }
 
   async function fetchStreamUrls(slug) {
-    // Radio Browser removed — use R2 tracks only
-    return null
+    const tag = GENRE_TAGS[slug] || slug
+    const res = await fetch(
+      `https://de1.api.radio-browser.info/json/stations/bytag/${encodeURIComponent(tag)}?limit=5&hidebroken=true&order=clickcount&reverse=true`
+    )
+    const stations = await res.json()
+    const station = stations.find(s => s.url_resolved) || stations[0]
+    return station?.url_resolved || null
   }
 
   // Pick 2 shadow genres: one similar (adjacent), one contrast (far in list)

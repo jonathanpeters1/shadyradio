@@ -37,6 +37,12 @@ static float g_meter[20]        = {};
 static float g_gain[16];
 static int   g_active[16];
 
+// Use Emscripten's EMSCRIPTEN_KEEPALIVE macro for exported functions
+#include <emscripten.h>
+
+extern "C" {
+
+EMSCRIPTEN_KEEPALIVE
 void init_engine(int sample_rate, int buffer_size) {
   g_sample_rate = sample_rate;
   g_buffer_size = buffer_size;
@@ -55,6 +61,7 @@ void init_engine(int sample_rate, int buffer_size) {
   init_automix(sample_rate, buffer_size);
 }
 
+EMSCRIPTEN_KEEPALIVE
 void process_audio() {
   // Process beat tracking for all channels (on raw input before EQ)
   for (int ch = 0; ch < 16; ch++) {
@@ -113,22 +120,35 @@ void process_audio() {
   }
 }
 
-float* get_input_buffer()  { return g_input; }
-float* get_output_buffer() { return g_output; }
-float* get_meter_buffer()  { return g_meter; }
+EMSCRIPTEN_KEEPALIVE
+float* get_input_buffer() { return g_input; }
 
+EMSCRIPTEN_KEEPALIVE
+float* get_output_buffer() { return g_output; }
+
+EMSCRIPTEN_KEEPALIVE
+float* get_meter_buffer() { return g_meter; }
+
+EMSCRIPTEN_KEEPALIVE
 void set_channel_active(int ch, int active) {
   if (ch>=0&&ch<16) {
     g_active[ch]=active;
     set_channel_automix_active(ch, active);
   }
 }
-void set_channel_gain(int ch, float gain)   { if (ch>=0&&ch<16) g_gain[ch]=gain; }
+
+EMSCRIPTEN_KEEPALIVE
+void set_channel_gain(int ch, float gain) { if (ch>=0&&ch<16) g_gain[ch]=gain; }
+
+EMSCRIPTEN_KEEPALIVE
 void set_channel_compression(int ch, float threshold_db, float ratio) {
   if (ch >= 0 && ch < 16) {
     set_channel_compression_internal(ch, threshold_db, ratio);
   }
 }
+
+} // extern "C"
+
 // get_channel_bpm, get_channel_beat_phase, get_channel_phrase_phase, get_channel_bpm_locked
 // are implemented in beat_tracker.cpp
 
@@ -140,8 +160,13 @@ extern int get_channel_key(int channel);
 extern void set_channel_key(int channel, int camelot_key);
 
 static float g_channel_bpm_hint[16] = {};  // 0 = no hint
-int   g_channel_key_hint[16] = {};  // -1 = unknown, accessible to automix.cpp
 
+// Global key hint array - defined here, accessed by automix.cpp
+int g_channel_key_hint[16] = {};  // -1 = unknown, accessible to automix.cpp
+
+extern "C" {
+
+EMSCRIPTEN_KEEPALIVE
 void set_channel_bpm(int ch, float bpm) {
   if (ch < 0 || ch >= 16) return;
   g_channel_bpm_hint[ch] = bpm;
@@ -151,12 +176,16 @@ void set_channel_bpm(int ch, float bpm) {
   }
 }
 
+EMSCRIPTEN_KEEPALIVE
 void set_channel_key(int ch, int camelot_key) {
   if (ch < 0 || ch >= 16) return;
   g_channel_key_hint[ch] = camelot_key;
 }
 
+EMSCRIPTEN_KEEPALIVE
 int get_channel_key_hint(int ch) {
   if (ch < 0 || ch >= 16) return -1;
   return g_channel_key_hint[ch];
 }
+
+} // extern "C"

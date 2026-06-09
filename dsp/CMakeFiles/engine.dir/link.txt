@@ -1,0 +1,1 @@
+/Users/jp/emsdk/upstream/emscripten/em++  -O3 -O3 -s WASM=1 -s EXPORTED_RUNTIME_METHODS=[HEAPF32,HEAP32] -s ALLOW_MEMORY_GROWTH=1 -s MODULARIZE=0 -o ../public/dsp/engine.js @CMakeFiles/engine.dir/objects1.rsp -o engine.js

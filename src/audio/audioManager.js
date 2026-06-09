@@ -25,7 +25,8 @@ class AudioManager {
     this.channels = Array(16).fill(null).map(() => ({
       element: null,
       sourceNode: null,
-      gainNode: null
+      gainNode: null,
+      isLoading: false
     }));
 
     // Channel error callbacks for stream recovery
@@ -137,11 +138,12 @@ class AudioManager {
           case 'ready':
             this.wasmReady = true
             console.log('%c[SF Engine] WASM ready', 'color:#d4a64f;font-weight:bold')
-            console.log('  AudioContext sampleRate:', this.audioContext?.sampleRate)
-            console.log('  AudioContext state:', this.audioContext?.state)
-            console.log('  WorkletNode inputs:', this.workletNode?.numberOfInputs)
-            console.log('  WorkletNode outputs:', this.workletNode?.numberOfOutputs)
-            console.log('  FX chain: dry=%o wet=%o', this.dryGain?.gain.value, this.wetGain?.gain.value)
+            // Re-activate any channels that started playing before WASM was ready
+            for (let i = 0; i < 16; i++) {
+              if (this.channels[i].element && !this.channels[i].element.paused) {
+                this.workletNode.port.postMessage({ type: 'set-active', channel: i, value: 1 })
+              }
+            }
             break;
           case 'error':
             console.error('WASM error:', e.data.message);
@@ -185,7 +187,8 @@ class AudioManager {
   }
 
   // Play a stream on a specific channel (creates/connects HTMLAudioElement internally)
-  play(channelIndex, url, meta = null) {
+  // onReady callback fires when audio is actually playing (for shadow channel volume)
+  play(channelIndex, url, meta = null, onReady = null) {
     if (channelIndex < 0 || channelIndex >= 16) {
       console.error('Invalid channel index:', channelIndex);
       return;
@@ -198,10 +201,18 @@ class AudioManager {
 
     const channel = this.channels[channelIndex];
 
+    // Prevent multiple simultaneous play() calls on same channel
+    if (channel.isLoading) {
+      console.warn(`Channel ${channelIndex} already loading, ignoring duplicate play()`);
+      return;
+    }
+    channel.isLoading = true;
+
     // Stop and clean up previous element fully before replacing
     if (channel.element) {
       channel.element.pause();
       channel.element.src = '';
+      channel.element.load(); // Force abort of stream loading
       channel.element = null;
     }
     if (channel.sourceNode) {
@@ -209,11 +220,13 @@ class AudioManager {
       channel.sourceNode = null;
     }
 
-    // Create new audio element
+    // Create new audio element - must be fresh to avoid state leakage
     const audio = new Audio();
     audio.crossOrigin = 'anonymous';
-    audio.preload = 'none';
+    audio.preload = 'auto'; // Start buffering immediately
+    // Set src and load first, then currentTime (some browsers need this order)
     audio.src = url;
+    audio.load();
     channel.element = audio;
 
     // Stream error recovery handlers
@@ -241,6 +254,7 @@ class AudioManager {
       // CORS: station doesn't allow Web Audio tap — play directly without DSP
       console.warn(`[SF] Ch${channelIndex} CORS blocked, playing direct:`, e.message);
       audio.crossOrigin = null;
+      audio.currentTime = 0;
       audio.play().catch(() => {});
       this.acquireWakeLock();
       return;
@@ -253,32 +267,81 @@ class AudioManager {
       channel.sourceNode.connect(this.masterAnalyser || this.audioContext.destination);
     }
 
-    // Activate channel in WASM
-    if (this.wasmReady) {
-      this.workletNode.port.postMessage({
-        type: 'set-active',
-        channel: channelIndex,
-        value: 1
-      });
-    }
+    // Wait for audio to be ready before playing (prevents delay)
+    const startPlaying = () => {
+      // Clear loading flag
+      channel.isLoading = false;
 
-    // Start playing
-    audio.play().catch(err => console.error('Play error on channel', channelIndex, err));
+      // Seed WASM engine with metadata hints BEFORE activating channel
+      // This ensures beat tracker is ready before audio starts flowing
+      if (this.wasmReady && this.workletNode) {
+        // Reset beat tracker first (clears old state)
+        this.workletNode.port.postMessage({
+          type: 'reset-beat-tracker',
+          channel: channelIndex
+        });
 
-    // Seed WASM engine with metadata hints (if available)
-    if (this.wasmReady) {
-      if (meta?.bpm) {
-        this.setChannelBpmHint(channelIndex, meta.bpm)
+        // Seed with pre-analyzed BPM for instant lock (before channel is active)
+        if (meta?.bpm) {
+          this.setChannelBpmHint(channelIndex, meta.bpm);
+        }
+
+        // Seed with pre-analyzed key for harmonic mixing
+        if (meta?.camelot) {
+          this.setChannelKeyHint(channelIndex, meta.camelot);
+        }
+
+        // NOW activate channel — beat tracker is already primed
+        console.log(`[SF] Activating channel ${channelIndex}${meta?.bpm ? ' with locked BPM' : ' (no BPM hint)'}`)
+        this.workletNode.port.postMessage({ type: 'set-active', channel: channelIndex, value: 1 });
+      } else if (this.workletNode) {
+        // WASM not ready yet, just activate (will seed when ready via onmessage 'ready')
+        console.log(`[SF] Activating channel ${channelIndex} (WASM not ready, will seed BPM when ready)`)
+        this.workletNode.port.postMessage({ type: 'set-active', channel: channelIndex, value: 1 });
       }
-      if (meta?.camelot) {
-        this.setChannelKeyHint(channelIndex, meta.camelot)
-      }
+
+      // Ensure audio starts from beginning (for files, not live streams)
+      try { audio.currentTime = 0; } catch (e) {}
+
+      // Start playing
+      audio.play()
+        .then(() => {
+          console.log('Playing on channel', channelIndex, ':', url);
+          // Notify caller that audio is ready (for shadow channel volume setup)
+          if (onReady) onReady(channelIndex);
+        })
+        .catch(err => {
+          console.error('Play error on channel', channelIndex, err);
+          channel.isLoading = false;
+        });
+
+      // Prevent device sleep while audio is playing
+      this.acquireWakeLock();
+    };
+
+    // If already ready, play immediately; otherwise wait for canplay
+    if (audio.readyState >= 3) {
+      startPlaying();
+    } else {
+      // 3 second timeout - if audio doesn't load, give up
+      const timeout = setTimeout(() => {
+        console.error(`Channel ${channelIndex} audio load timeout`);
+        channel.isLoading = false;
+        if (channel.element === audio) {
+          this.stop(channelIndex);
+        }
+      }, 3000);
+
+      audio.addEventListener('canplay', () => {
+        clearTimeout(timeout);
+        startPlaying();
+      }, { once: true });
+
+      audio.addEventListener('error', () => {
+        clearTimeout(timeout);
+        channel.isLoading = false;
+      }, { once: true });
     }
-
-    // Prevent device sleep while audio is playing
-    this.acquireWakeLock()
-
-    console.log('Playing on channel', channelIndex, ':', url);
   }
 
   // Stop playback on a specific channel
@@ -287,9 +350,13 @@ class AudioManager {
 
     const channel = this.channels[channelIndex];
 
+    // Clear loading flag
+    channel.isLoading = false;
+
     if (channel.element) {
       channel.element.pause();
       channel.element.src = '';
+      channel.element.load(); // Force abort of stream loading
     }
 
     if (channel.sourceNode) {
@@ -399,6 +466,7 @@ class AudioManager {
   setChannelBpmHint(index, bpm) {
     if (index < 0 || index >= 16) return
     if (!this.workletNode || !this.wasmReady) return
+    console.log(`[SF] Seeding BPM ${bpm} on channel ${index}`)
     this.workletNode.port.postMessage({
       type: 'set-bpm-hint', channel: index, value: bpm
     })

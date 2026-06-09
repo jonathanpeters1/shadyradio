@@ -16,6 +16,7 @@ class SFEngineProcessor extends AudioWorkletProcessor {
           env: {
             memory: new WebAssembly.Memory({ initial: 256 }),
             emscripten_resize_heap: () => {},
+            emscripten_notify_memory_growth: () => {},
           },
           wasi_snapshot_preview1: { proc_exit: () => {} },
         }).then(result => {
@@ -36,6 +37,7 @@ class SFEngineProcessor extends AudioWorkletProcessor {
       if (e.data.type === 'set-compression') wasm?._set_channel_compression(e.data.channel, e.data.threshold, e.data.ratio)
       if (e.data.type === 'set-bpm-hint')   wasm?._set_channel_bpm(e.data.channel, e.data.value)
       if (e.data.type === 'set-key-hint')   wasm?._set_channel_key(e.data.channel, e.data.value)
+      if (e.data.type === 'reset-beat-tracker') wasm?._reset_beat_tracker(e.data.channel)
     }
   }
 

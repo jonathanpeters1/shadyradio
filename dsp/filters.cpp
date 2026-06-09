@@ -185,10 +185,14 @@ void ChannelEQ::update_coefficients(int sample_rate) {
                         high_shelf.a0, high_shelf.a1, high_shelf.a2);
 }
 
+// Use Emscripten's EMSCRIPTEN_KEEPALIVE macro for exported functions
+#include <emscripten.h>
+
 // Public API function (declared in engine.h)
-void set_channel_eq(int channel, float low_db, float mid_db, float high_db) {
+EMSCRIPTEN_KEEPALIVE
+extern "C" void set_channel_eq(int channel, float low_db, float mid_db, float high_db) {
   if (channel < 0 || channel >= 16) return;
-  
+
   g_channel_eq[channel].low_gain_db = low_db;
   g_channel_eq[channel].mid_gain_db = mid_db;
   g_channel_eq[channel].high_gain_db = high_db;

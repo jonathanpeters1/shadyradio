@@ -3,8 +3,12 @@
 #include <cstring>
 #include <algorithm>
 
+// Use Emscripten's EMSCRIPTEN_KEEPALIVE macro for exported functions
+#include <emscripten.h>
+
+static const int MAX_CHANNELS = 16;
+
 namespace {
-  static const int MAX_CHANNELS = 16;
   static const int SAMPLE_RATE = 44100;
   static const float HOP_SIZE_MS = 10.0f;
   static const int HOP_SIZE_SAMPLES = static_cast<int>(SAMPLE_RATE * HOP_SIZE_MS / 1000.0f); // 441 samples
@@ -49,9 +53,13 @@ namespace {
     int samples_processed = 0;
   };
 
-  static BeatTracker g_trackers[MAX_CHANNELS];
-  static int g_sample_rate = SAMPLE_RATE;
-  static int g_hop_size = HOP_SIZE_SAMPLES;
+} // namespace
+
+static BeatTracker g_trackers[MAX_CHANNELS];
+static int g_sample_rate = SAMPLE_RATE;
+static int g_hop_size = HOP_SIZE_SAMPLES;
+
+namespace {
 
   // Helper: Compute median of array
   float compute_median(float* arr, int count) {
@@ -273,33 +281,10 @@ void process_beat_tracker(int channel, const float* samples, int num_samples) {
 }
 
 // Reset beat tracker for a channel
-void reset_beat_tracker(int channel) {
+EMSCRIPTEN_KEEPALIVE
+extern "C" void reset_beat_tracker(int channel) {
   if (channel < 0 || channel >= MAX_CHANNELS) return;
   g_trackers[channel] = BeatTracker();
-}
-
-// Get BPM estimate for channel
-float get_channel_bpm(int channel) {
-  if (channel < 0 || channel >= MAX_CHANNELS) return 120.0f;
-  return g_trackers[channel].bpm_estimate;
-}
-
-// Get beat phase (0.0-1.0 within current beat)
-float get_channel_beat_phase(int channel) {
-  if (channel < 0 || channel >= MAX_CHANNELS) return 0.0f;
-  return g_trackers[channel].beat_phase;
-}
-
-// Get phrase phase (0.0-1.0 within 8-bar phrase)
-float get_channel_phrase_phase(int channel) {
-  if (channel < 0 || channel >= MAX_CHANNELS) return 0.0f;
-  return g_trackers[channel].phrase_phase;
-}
-
-// Get BPM locked status
-int get_channel_bpm_locked(int channel) {
-  if (channel < 0 || channel >= MAX_CHANNELS) return 0;
-  return g_trackers[channel].bpm_locked ? 1 : 0;
 }
 
 // Seed beat tracker with known BPM (from pre-analyzed metadata)
@@ -316,3 +301,32 @@ void seed_beat_tracker_bpm(int channel, float bpm) {
   for (int i = 0; i < 80 && i < 100; i++) t.bpm_history[i] = bpm;
   t.bpm_history_count = 80;
 }
+
+// Exported WASM functions (outside anonymous namespace for C linkage)
+extern "C" {
+
+EMSCRIPTEN_KEEPALIVE
+float get_channel_bpm(int channel) {
+  if (channel < 0 || channel >= MAX_CHANNELS) return 120.0f;
+  return g_trackers[channel].bpm_estimate;
+}
+
+EMSCRIPTEN_KEEPALIVE
+float get_channel_beat_phase(int channel) {
+  if (channel < 0 || channel >= MAX_CHANNELS) return 0.0f;
+  return g_trackers[channel].beat_phase;
+}
+
+EMSCRIPTEN_KEEPALIVE
+float get_channel_phrase_phase(int channel) {
+  if (channel < 0 || channel >= MAX_CHANNELS) return 0.0f;
+  return g_trackers[channel].phrase_phase;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int get_channel_bpm_locked(int channel) {
+  if (channel < 0 || channel >= MAX_CHANNELS) return 0;
+  return g_trackers[channel].bpm_locked ? 1 : 0;
+}
+
+} // extern "C"

@@ -8,6 +8,9 @@ extern float get_channel_bpm(int channel);
 extern float get_channel_phrase_phase(int channel);
 extern int get_channel_bpm_locked(int channel);
 
+// External key hints from engine.cpp (set via set_channel_key from JS)
+extern int g_channel_key_hint[16];
+
 namespace {
   static const int MAX_CHANNELS = 16;
   static const int ENERGY_HISTORY_SIZE = 8;
@@ -33,9 +36,6 @@ namespace {
     0, 5, 10, 3, 8, 1, 6, 11, 4, 9, 2, 7,
     12, 17, 22, 15  // Second set of keys for channels 12-15
   };
-
-// External key hints from engine.cpp (set via set_channel_key from JS)
-extern int g_channel_key_hint[];
 
   // Channel energy history for scoring
   struct EnergyHistory {
@@ -429,6 +429,15 @@ float get_automix_gain(int channel) {
 void set_channel_automix_active(int channel, int active) {
   if (channel >= 0 && channel < MAX_CHANNELS) {
     g_channel_active[channel] = active ? 1.0f : 0.0f;
+    if (active) {
+      // Newly activated channel plays at full gain unless a crossfade is running
+      if (g_automix.crossfade_state == IDLE) {
+        g_channel_gains[channel] = 1.0f;
+        g_automix.active_channel = channel;
+      }
+    } else {
+      g_channel_gains[channel] = 0.0f;
+    }
   }
 }
 
