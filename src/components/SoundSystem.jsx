@@ -90,6 +90,9 @@ export default function SoundSystem() {
     Array(16).fill(null).map(() => ({ low: 0, mid: 0, high: 0 }))
   )
 
+  // PWA install prompt
+  const [installPrompt, setInstallPrompt] = useState(null)
+
   // Show clock state
   const [setDuration, setSetDuration] = useState(0)
   const showStartRef = useRef(null)
@@ -311,6 +314,78 @@ export default function SoundSystem() {
     return () => clearInterval(clockTimerRef.current)
   }, [isPlaying])
 
+  // ── keyboard shortcuts ────────────────────────────────────────────────────
+  useEffect(() => {
+    function onKey(e) {
+      // Never intercept when user is typing
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+
+      switch (e.key) {
+        case ' ':
+          e.preventDefault()
+          togglePlay()
+          break
+        case 'Escape':
+          skipStop()
+          break
+        case 's':
+        case 'S':
+          activateSkit()
+          break
+        case 'p':
+        case 'P':
+          setProOpen(v => !v)
+          break
+        case 'f':
+        case 'F': {
+          const next = !fxMode
+          setFxMode(next)
+          if (next) audioManager.enableFX(0.35)
+          else audioManager.disableFX()
+          break
+        }
+        case 'ArrowRight': {
+          e.preventDefault()
+          // Advance to next genre
+          const cur = GENRES.findIndex(g => g.slug === active)
+          const next = GENRES[(cur + 1) % GENRES.length]
+          tapGenre(next.slug)
+          break
+        }
+        case 'ArrowLeft': {
+          e.preventDefault()
+          // Back to previous genre
+          const cur = GENRES.findIndex(g => g.slug === active)
+          const prev = GENRES[(cur - 1 + GENRES.length) % GENRES.length]
+          tapGenre(prev.slug)
+          break
+        }
+        default:
+          // Number keys 1-9 → genres 0-8, 0 → genre 9
+          if (e.key >= '1' && e.key <= '9') {
+            const idx = parseInt(e.key) - 1
+            if (GENRES[idx]) tapGenre(GENRES[idx].slug)
+          } else if (e.key === '0') {
+            if (GENRES[9]) tapGenre(GENRES[9].slug)
+          }
+      }
+    }
+
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [active, isPlaying, fxMode, proOpen])
+
+  // ── PWA install prompt ────────────────────────────────────────────────────
+  useEffect(() => {
+    function onInstallPrompt(e) {
+      e.preventDefault()
+      setInstallPrompt(e)
+    }
+    window.addEventListener('beforeinstallprompt', onInstallPrompt)
+    return () => window.removeEventListener('beforeinstallprompt', onInstallPrompt)
+  }, [])
+
   // ── audio engine ─────────────────────────────────────────────────────────
 
   async function fetchR2Track(slug) {
@@ -387,6 +462,14 @@ export default function SoundSystem() {
       // Reset retry count on successful play
       retryCountRef.current[channelIndex] = 0
     }
+  }
+
+  // ── PWA install handler ───────────────────────────────────────────────────
+  async function handleInstall() {
+    if (!installPrompt) return
+    installPrompt.prompt()
+    const { outcome } = await installPrompt.userChoice
+    if (outcome === 'accepted') setInstallPrompt(null)
   }
 
   // ── play / pause ──────────────────────────────────────────────────────────
@@ -595,6 +678,15 @@ export default function SoundSystem() {
           <span className="ss-logo-text">SF</span>
         </div>
         <p className="ss-header-title">· SOUNDFACTORY ·</p>
+        {installPrompt && (
+          <button className="ss-install-btn" onClick={handleInstall} title="Add to Home Screen">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" strokeWidth="2">
+              <path d="M12 2v13M7 10l5 5 5-5"/>
+              <path d="M3 19h18"/>
+            </svg>
+          </button>
+        )}
         <button className={`ss-cam-btn ${cameraOn ? 'ss-cam-btn--on' : ''}`}
           onClick={() => setCameraOn(v => !v)} title="Camera">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">

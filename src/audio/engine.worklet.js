@@ -3,6 +3,8 @@ let wasm = null
 let wasmReady = false
 let inputPtr = 0, outputPtr = 0, meterPtr = 0
 let bufferSize = 128
+let heapView = null
+let lastMemoryBuffer = null
 
 class SFEngineProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -41,7 +43,11 @@ class SFEngineProcessor extends AudioWorkletProcessor {
     const output = outputs[0]
     if (!output) return true
 
-    const heap32 = new Float32Array(wasm.memory.buffer)
+    if (wasm.memory.buffer !== lastMemoryBuffer) {
+      heapView = new Float32Array(wasm.memory.buffer)
+      lastMemoryBuffer = wasm.memory.buffer
+    }
+    const heap32 = heapView
     const inOff = inputPtr >> 2
     const outOff = outputPtr >> 2
 

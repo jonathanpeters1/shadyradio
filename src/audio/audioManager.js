@@ -30,11 +30,35 @@ class AudioManager {
 
     // Channel error callbacks for stream recovery
     this.channelErrorCallbacks = {}   // { channelIndex: callback }
+
+    // Screen wake lock to prevent sleep during playback
+    this.wakeLock = null
   }
 
   // Register error handler for a specific channel
   onChannelError(channelIndex, callback) {
     this.channelErrorCallbacks[channelIndex] = callback
+  }
+
+  // Acquire screen wake lock (prevents device sleep)
+  async acquireWakeLock() {
+    if (!('wakeLock' in navigator)) return
+    try {
+      this.wakeLock = await navigator.wakeLock.request('screen')
+      this.wakeLock.addEventListener('release', () => {
+        this.wakeLock = null
+      })
+    } catch (e) {
+      // Wake lock denied (battery saver mode, etc.) — non-fatal
+    }
+  }
+
+  // Release screen wake lock
+  releaseWakeLock() {
+    if (this.wakeLock) {
+      this.wakeLock.release()
+      this.wakeLock = null
+    }
   }
 
   // Create synthetic impulse response for reverb
@@ -131,6 +155,15 @@ class AudioManager {
         buffer: this.wasmBuffer
       });
 
+      // Handle page visibility changes — re-acquire wake lock when tab returns
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && this.fxEnabled !== undefined) {
+          // Re-acquire wake lock if we're actively playing when tab comes back
+          const anyActive = this.channels.some(c => c.element && !c.element.paused)
+          if (anyActive) this.acquireWakeLock()
+        }
+      })
+
       console.log('AudioManager initialized');
       return this.audioContext;
     } catch (error) {
@@ -202,6 +235,9 @@ class AudioManager {
     // Start playing
     audio.play().catch(err => console.error('Play error on channel', channelIndex, err));
 
+    // Prevent device sleep while audio is playing
+    this.acquireWakeLock()
+
     console.log('Playing on channel', channelIndex, ':', url);
   }
 
@@ -229,6 +265,12 @@ class AudioManager {
         channel: channelIndex,
         value: 0
       });
+    }
+
+    // Release wake lock only if no channels are playing
+    const anyStillPlaying = this.channels.some(c => c.element && !c.element.paused)
+    if (!anyStillPlaying) {
+      this.releaseWakeLock()
     }
 
     console.log('Stopped channel', channelIndex);
@@ -458,6 +500,9 @@ class AudioManager {
     this.meterCallback = null;
     this.wasmBuffer = null;
     this.fxEnabled = false;
+
+    // Release wake lock on cleanup
+    this.releaseWakeLock()
   }
 }
 
