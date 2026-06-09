@@ -6,7 +6,6 @@
 extern void init_eq_system(int sample_rate);
 extern float process_channel_eq(int channel, float sample);
 extern void reset_channel_eq(int channel);
-extern void set_channel_eq_internal(int channel, float low_db, float mid_db, float high_db);
 
 static int   g_sample_rate  = 44100;
 static int   g_buffer_size  = 128;
@@ -64,12 +63,6 @@ float* get_meter_buffer()  { return g_meter; }
 
 void set_channel_active(int ch, int active) { if (ch>=0&&ch<16) g_active[ch]=active; }
 void set_channel_gain(int ch, float gain)   { if (ch>=0&&ch<16) g_gain[ch]=gain; }
-void set_channel_eq(int ch, float lo, float mid, float hi) {
-  if (ch >= 0 && ch < 16) {
-    set_channel_eq_internal(ch, lo, mid, hi);
-  }
-}
-
 float get_channel_bpm(int ch)          { return 120.0f; }
 float get_channel_beat_phase(int ch)   { return 0.0f; }
 float get_channel_phrase_phase(int ch) { return 0.0f; }

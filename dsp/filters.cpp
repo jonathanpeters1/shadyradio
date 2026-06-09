@@ -185,8 +185,8 @@ void ChannelEQ::update_coefficients(int sample_rate) {
                         high_shelf.a0, high_shelf.a1, high_shelf.a2);
 }
 
-// Internal EQ functions
-void set_channel_eq_internal(int channel, float low_db, float mid_db, float high_db) {
+// Public API function (declared in engine.h)
+void set_channel_eq(int channel, float low_db, float mid_db, float high_db) {
   if (channel < 0 || channel >= 16) return;
   
   g_channel_eq[channel].low_gain_db = low_db;
