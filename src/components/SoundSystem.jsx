@@ -10,6 +10,21 @@ import SFSpectrum from './SFSpectrum'
 import audioManager from '../audio/audioManager'
 import './SoundSystem.css'
 
+// Update CarPlay / Media Session metadata
+function updateMediaSession(genreName, bpm, isPlaying) {
+  if (!('mediaSession' in navigator)) return
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: genreName || 'Shady Radio',
+    artist: 'Shady — SoundFactory',
+    album: bpm > 0 ? `${Math.round(bpm)} BPM` : 'Auto-DJ',
+    artwork: [
+      { src: '/sf-logo.jpeg', sizes: '192x192', type: 'image/jpeg' },
+      { src: '/sf-logo.jpeg', sizes: '512x512', type: 'image/jpeg' },
+    ]
+  })
+  navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused'
+}
+
 const GENRES = [
   { name: 'House',                    slug: 'house' },
   { name: 'Afro House',               slug: 'afro-house' },
@@ -305,7 +320,18 @@ export default function SoundSystem() {
     if (isPlaying) {
       clockTimerRef.current = setInterval(() => {
         if (showStartRef.current) {
-          setSetDuration(Math.floor((Date.now() - showStartRef.current) / 1000))
+          const newDuration = Math.floor((Date.now() - showStartRef.current) / 1000)
+          setSetDuration(newDuration)
+          // Update Media Session position state for CarPlay progress bar
+          if ('mediaSession' in navigator && navigator.mediaSession.setPositionState) {
+            try {
+              navigator.mediaSession.setPositionState({
+                duration: Math.max(newDuration + 3600, newDuration + 60),
+                playbackRate: 1,
+                position: newDuration
+              })
+            } catch {}
+          }
         }
       }, 1000)
     } else {
@@ -313,6 +339,43 @@ export default function SoundSystem() {
     }
     return () => clearInterval(clockTimerRef.current)
   }, [isPlaying])
+
+  // ── Media Session metadata for CarPlay ────────────────────────────────────
+  useEffect(() => {
+    const genreName = GENRES.find(g => g.slug === active)?.name || 'Shady Radio'
+    updateMediaSession(genreName, activeBpm, isPlaying)
+  }, [active, activeBpm, isPlaying])
+
+  // ── Media Session action handlers (CarPlay controls) ───────────────────────
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+
+    navigator.mediaSession.setActionHandler('play', () => {
+      if (!isPlayingRef.current) togglePlay()
+    })
+    navigator.mediaSession.setActionHandler('pause', () => {
+      if (isPlayingRef.current) togglePlay()
+    })
+    navigator.mediaSession.setActionHandler('stop', () => {
+      skipStop()
+    })
+    navigator.mediaSession.setActionHandler('nexttrack', () => {
+      const cur = GENRES.findIndex(g => g.slug === active)
+      const next = GENRES[(cur + 1) % GENRES.length]
+      tapGenre(next.slug)
+    })
+    navigator.mediaSession.setActionHandler('previoustrack', () => {
+      const cur = GENRES.findIndex(g => g.slug === active)
+      const prev = GENRES[(cur - 1 + GENRES.length) % GENRES.length]
+      tapGenre(prev.slug)
+    })
+
+    return () => {
+      ['play','pause','stop','nexttrack','previoustrack'].forEach(action => {
+        try { navigator.mediaSession.setActionHandler(action, null) } catch {}
+      })
+    }
+  }, [])
 
   // ── keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
@@ -505,6 +568,26 @@ export default function SoundSystem() {
     if (!wasAlreadySkit && !shadyBusy) {
       setShadyInput('Give us a skit right now — something fierce')
       setTimeout(() => sendToShady('Give us a skit right now — something fierce'), 100)
+    }
+  }
+
+  // ── share via Web Share API (Apple Messages / AirDrop) ─────────────────────
+  async function shareNow() {
+    if (!navigator.share) return
+    const genre = GENRES.find(g => g.slug === active)
+    const genreName = genre?.name || 'the mix'
+    const bpmText = activeBpm > 0 ? ` @ ${Math.round(activeBpm)} BPM` : ''
+    const shadyLine = shadyReply && shadyReply !== '...'
+      ? `\n\n"${shadyReply}" — Shady`
+      : ''
+    try {
+      await navigator.share({
+        title: 'Shady Radio',
+        text: `Listening to ${genreName}${bpmText} on Shady Radio${shadyLine}`,
+        url: window.location.href,
+      })
+    } catch (e) {
+      // User cancelled share or API not available — non-fatal
     }
   }
 
@@ -908,6 +991,22 @@ export default function SoundSystem() {
             </svg>
             <span>Chat</span>
           </button>
+
+          {/* share (Messages / AirDrop) */}
+          {navigator.share && (
+            <button className="ss-btn ss-btn--labeled" onClick={shareNow}
+                    title="Share via Messages / AirDrop">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth="2">
+                <circle cx="18" cy="5" r="3"/>
+                <circle cx="6" cy="12" r="3"/>
+                <circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+              <span>Share</span>
+            </button>
+          )}
 
         </div>
 
