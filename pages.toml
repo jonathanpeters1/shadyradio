@@ -20,4 +20,4 @@ pages_build_output_dir = "dist"
 compatibility_date = "2024-01-01"
 
 [env.production.vars]
-VITE_R2_BASE_URL = "https://shadyradio-api.workers.dev"
+VITE_R2_BASE_URL = "https://shadyradio-api.sfnyc.workers.dev"
