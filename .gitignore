@@ -5,3 +5,12 @@ dist
 .env.local
 .env.production
 *.o
+
+# CMake build artifacts
+dsp/CMakeCache.txt
+dsp/CMakeFiles/
+dsp/Makefile
+dsp/cmake_install.cmake
+dsp/*.js
+dsp/*.wasm
+dsp/build/
