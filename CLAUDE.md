@@ -1,16 +1,15 @@
-# CLAUDE.md — ShadyRadio Web App (THE MAIN FRONT END)
+# CLAUDE.md — ShadyRadio Web App
 
 ## This is the app
 
-**Vite + React PWA** — 16-channel speaker grid, Shady AI character, hero stage.
-Runs on iPhone, Android, browser. Deployed via `npx vite --host`.
+**Vite + React PWA** — 16-channel speaker grid, Shady AI character, C++/WASM DSP engine.
+Runs on iPhone, Android, desktop browser.
 
 ```bash
 cd /Users/jp/shadyradio/web
-npx vite --host          # local: localhost:3000 / network: 192.168.1.153:3000
+npx vite --host          # localhost:3000
 ```
 
-Also lives at: `/Users/jp/Desktop/shadyradio/web/` (same copy)
 GitHub: https://github.com/jonathanpeters1/shadyradio
 
 ---
@@ -19,78 +18,59 @@ GitHub: https://github.com/jonathanpeters1/shadyradio
 
 | File | Role |
 |------|------|
-| `src/components/SoundSystem.jsx` | Main UI — 16 speakers, hero stage, Shady chat, all state |
+| `src/components/SoundSystem.jsx` | Main UI — all state, all logic |
 | `src/components/SoundSystem.css` | All layout + visual styles |
-| `src/components/SpeakerCell.jsx` | Individual speaker tile with woofer animation |
+| `src/components/SpeakerCell.jsx` | Speaker tile — cone pump animation, glow |
+| `src/audio/audioManager.js` | AudioContext bridge — worklet, WASM, channels |
+| `public/audio/engine.worklet.js` | AudioWorklet (MUST stay in public/ — Vite must NOT transform it) |
+| `public/dsp/engine.wasm` | Compiled C++ DSP engine (31KB) |
 | `src/components/SFParticleField.jsx` | Particle field + SF logo ↔ lip morph |
 | `src/components/ShadyStage.jsx` | Flying word animations when Shady speaks |
 | `src/components/ShadyProps.jsx` | Fan snap drag queen animation |
-| `src/components/SFCamera.jsx` | Camera feed layer |
-| `public/manifest.json` | PWA manifest (fullscreen, portrait) |
-| `public/sw.js` | Service worker (cache-first assets) |
-| `public/woofer.png` | Speaker cone image |
-| `public/sf-logo.jpeg` | App icon |
+| `src/components/ProPanel.jsx` | Slide-up 16-ch mixer with EQ |
+| `src/components/DiagPanel.jsx` | Dev diagnostic overlay (tap logo 5×) |
+| `worker/src/index.js` | Cloudflare Worker — R2 audio streaming API |
 
 ---
 
-## Layout
+## Audio chain (fully wired)
 
 ```
-┌────────────────────────────────┐
-│  HEADER (logo + cam button)    │  position:absolute, z:30
-├────────────────────────────────┤
-│                                │
-│  HERO STAGE  (top 36%)         │  24/7 show content — TBD
-│  particle field behind         │
-│                                │
-│  ┌──┬──┬──┬──┐                 │
-│  │  │  │  │  │  4×4 SPEAKER   │  bottom 64%, grid
-│  │  │  │  │  │  GRID          │
-│  │  │  │  │  │                │
-│  │  │  │  │  │                │
-│  └──┴──┴──┴──┘                 │
-│                                │
-├────────────────────────────────┤
-│  BUTTON STRIP (Play/Skit/etc)  │
-│  SHADY INPUT BAR               │
-└────────────────────────────────┘
+tapGenre(slug)
+  → channelIndex = GENRES.findIndex(slug)   // 0–15
+  → fetchR2Track(slug)                       // R2 first
+  → fetchStreamUrls(slug)                   // Radio Browser fallback
+  → audioManager.play(channelIndex, url)
+      → HTMLAudioElement → createMediaElementSource
+      → connect to AudioWorkletNode (input channel = channelIndex)
+      → WASM DSP: EQ → compressor → automix crossfade
+      → masterAnalyser → destination
 ```
+
+Meter bridge: worklet posts 20 floats at 60fps:
+- `[0–15]` = per-channel RMS
+- `[16]` = active channel index
+- `[17]` = pending channel index
+- `[18]` = crossfade progress (0–1)
+- `[19]` = active BPM
 
 ---
 
-## The Character — SHADY
+## Shady AI
 
 - Based on Xander C. Gaines (House of Aviance, NYC door legend)
 - Drag queen persona — sharp reads, ballroom vernacular, Spanglish, dry humor
-- Chat endpoint: `POST http://192.168.1.167:8099/shady`
-- Voice TTS: `POST http://192.168.1.167:8099/synthesize` → audio blob
-- Mac Pro at `192.168.1.167` must be running the voice server (port 8099)
+- Dev: proxied via Vite → `192.168.1.167:8099` (Mac Pro must be running)
+- Prod: `VITE_SHADY_URL` in `.env.production` → Cloudflare Tunnel URL
+- Chat: `POST /api/shady` → `/shady`
+- TTS: `POST /api/synthesize` → `/synthesize` → audio blob → plays via audioManager.getContext()
 
 ---
 
-## Audio
+## Production blockers (not yet deployed)
 
-- WebSocket `ws://localhost:8080` → 16-band meter data (with sim fallback)
-- `tapGenre(slug)` sets visual state only — **music streaming not yet wired**
-- Needs Pegasus backend URL to stream actual audio
-
----
-
-## Hero Stage vision
-
-The top 36% is a **24/7 live flatscreen show** — Shady as MC, Claude as the show-runner.
-Currently a placeholder div. Build: Claude API (Haiku) on Mac Pro → drives Shady's lines, 
-updates content, runs the show autonomously all night.
-
----
-
-## Still to build
-
-- [ ] Wire `tapGenre()` to actual audio streaming (Pegasus backend)
-- [ ] Hero stage show content — Claude agent on Mac Pro
-- [ ] Radio / Club / Vocal / Skit mode functionality
-- [ ] Pro button
-- [ ] CarPlay integration
+- `.env.production` needs real Cloudflare Tunnel URL for Shady
+- `worker/wrangler.toml` needs real R2 public bucket URL for audio
 
 ---
 
@@ -100,3 +80,4 @@ updates content, runs the show autonomously all night.
 - Shady is a real person in the UI — never break character
 - Do NOT add max-width constraints — speakers must feel organic and full-bleed
 - Do NOT simplify or stub real code
+- AudioWorklet file MUST stay in `public/audio/` — never move to `src/`
