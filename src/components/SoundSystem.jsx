@@ -597,7 +597,7 @@ export default function SoundSystem() {
     if (!text || shadyBusy) return
     setShadyBusy(true); setShadyInput(''); setShadyReply('...')
     try {
-      const res = await fetch('http://192.168.1.167:8099/shady', {
+      const res = await fetch('/api/shady', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),
@@ -636,7 +636,7 @@ export default function SoundSystem() {
       // duck music while Shady speaks
       if (audioRef.current) audioRef.current.volume = 0.18
 
-      const speakRes = await fetch('http://192.168.1.167:8099/synthesize', {
+      const speakRes = await fetch('/api/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: reply }),
@@ -647,8 +647,8 @@ export default function SoundSystem() {
         const audio = new Audio(url)
 
         try {
-          const actx = audioCtxRef.current || new (window.AudioContext || window.webkitAudioContext)()
-          if (!audioCtxRef.current) audioCtxRef.current = actx
+          const actx = audioManager.getContext()
+          if (!actx) throw new Error('no audio context')
           if (actx.state === 'suspended') await actx.resume()
           const src      = actx.createMediaElementSource(audio)
           const analyser = actx.createAnalyser()
