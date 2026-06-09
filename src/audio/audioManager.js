@@ -18,6 +18,9 @@ class AudioManager {
     this.wetGain = null;
     this.convolver = null;
 
+    // Spectrum analyzer for hero visualizer
+    this.spectrumAnalyser = null;
+
     // 16 channel slots
     this.channels = Array(16).fill(null).map(() => ({
       element: null,
@@ -367,6 +370,23 @@ class AudioManager {
     this.wetGain.gain.setTargetAtTime(0.0, this.audioContext.currentTime, 0.05)
   }
 
+  // Get or create spectrum analyser for hero visualizer
+  getSpectrumAnalyser() {
+    if (this.spectrumAnalyser) return this.spectrumAnalyser
+    if (!this.audioContext || !this.workletNode) return null
+
+    this.spectrumAnalyser = this.audioContext.createAnalyser()
+    this.spectrumAnalyser.fftSize = 2048
+    this.spectrumAnalyser.smoothingTimeConstant = 0.78
+    this.spectrumAnalyser.minDecibels = -90
+    this.spectrumAnalyser.maxDecibels = -10
+
+    // Tap off workletNode in parallel — does not affect existing signal chain
+    this.workletNode.connect(this.spectrumAnalyser)
+
+    return this.spectrumAnalyser
+  }
+
   // Cleanup
   destroy() {
     // Disconnect all channels
@@ -386,6 +406,11 @@ class AudioManager {
     if (this.convolver) {
       this.convolver.disconnect();
       this.convolver = null;
+    }
+
+    if (this.spectrumAnalyser) {
+      this.spectrumAnalyser.disconnect()
+      this.spectrumAnalyser = null
     }
 
     if (this.masterAnalyser) {

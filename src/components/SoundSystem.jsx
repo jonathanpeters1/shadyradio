@@ -6,6 +6,7 @@ import ShadyStage from './ShadyStage'
 import ShadyProps from './ShadyProps'
 import ChatPanel from './ChatPanel'
 import ProPanel from './ProPanel'
+import SFSpectrum from './SFSpectrum'
 import audioManager from '../audio/audioManager'
 import './SoundSystem.css'
 
@@ -505,6 +506,23 @@ export default function SoundSystem() {
         {cameraOn && <SFCamera active={cameraOn} onMotion={() => {}} />}
 
         <div className="ss-hero-layer">
+          {/* Spectrum behind everything */}
+          <SFSpectrum isPlaying={isPlaying} />
+
+          {/* Now playing strip — top of hero */}
+          {active && (
+            <div className="ss-now-playing">
+              <span className="ss-np-dot" />
+              <span className="ss-np-genre">
+                {GENRES.find(g => g.slug === active)?.name?.toUpperCase() || active.toUpperCase()}
+              </span>
+              {activeBpm > 0 && (
+                <span className="ss-np-bpm">{Math.round(activeBpm)} BPM</span>
+              )}
+            </div>
+          )}
+
+          {/* BPM + crossfade */}
           {activeBpm > 0 && (
             <div className="ss-hero-bpm">
               <span className="ss-hero-bpm-number">{Math.round(activeBpm)}</span>
