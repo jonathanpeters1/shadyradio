@@ -68,9 +68,9 @@ namespace {
 
 // RBJ coefficient calculations
 namespace RBJ {
-  // Helper: dB to linear amplitude
+  // Helper: dB to linear amplitude (RBJ cookbook: A = 10^(dBgain/40) for shelves/peaking)
   inline float db_to_gain(float db) {
-    return std::pow(10.0f, db / 20.0f);
+    return std::pow(10.0f, db / 40.0f);
   }
   
   // Helper: clamp value

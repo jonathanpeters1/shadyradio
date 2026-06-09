@@ -87,11 +87,12 @@ void process_audio() {
     g_output[g_buffer_size + s] = process_master_limiter(sumR);
   }
   // compute per-channel RMS (post-EQ, pre-compression for metering)
+  // Note: EQ already applied in main mix loop above, meter from processed signal
   float channel_rms[16];
   for (int ch = 0; ch < 16; ch++) {
     float rms = 0;
     for (int s = 0; s < g_buffer_size; s++) {
-      float x = process_channel_eq(ch, g_input[ch * g_buffer_size + s]);
+      float x = g_input[ch * g_buffer_size + s];
       rms += x * x;
     }
     channel_rms[ch] = sqrtf(rms / g_buffer_size);
