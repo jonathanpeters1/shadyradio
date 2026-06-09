@@ -5,7 +5,7 @@ import SFCamera from './SFCamera'
 import ShadyStage from './ShadyStage'
 import ShadyProps from './ShadyProps'
 import ChatPanel from './ChatPanel'
-import audioManager from '../utils/audioManager'
+import audioManager from '../audio/audioManager'
 import './SoundSystem.css'
 
 const GENRES = [
@@ -98,7 +98,7 @@ export default function SoundSystem() {
   // ── audio manager setup + meter bridge ─────────────────────────────
   useEffect(() => {
     // Set up meter callback from WASM engine
-    audioManager.onMeter((meters) => {
+    audioManager.onMeterUpdate((meters) => {
       // meters[0-15] = channel RMS, [16] = active_channel, [17] = pending_channel
       // [18] = crossfade_progress, [19] = active_bpm
       const activeCh = Math.round(meters[16]);
