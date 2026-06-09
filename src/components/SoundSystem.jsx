@@ -200,6 +200,19 @@ export default function SoundSystem() {
 
   // ── audio engine ─────────────────────────────────────────────────────────
 
+  async function fetchR2Track(slug) {
+    const base = import.meta.env.VITE_R2_BASE_URL || ''
+    if (!base) return null
+    try {
+      const res = await fetch(`${base}/api/random?genre=${encodeURIComponent(slug)}`)
+      if (!res.ok) return null
+      const data = await res.json()
+      return data.url || null
+    } catch {
+      return null
+    }
+  }
+
   async function fetchStreamUrls(slug) {
     const tag = GENRE_TAGS[slug] || slug
     const res = await fetch(
@@ -219,14 +232,13 @@ export default function SoundSystem() {
     }
 
     try {
-      const url = await fetchStreamUrls(slug)
-      if (url) {
-        audioManager.play(channelIndex, url);
-        setLoadingAudio(false);
-      }
-    } catch {
-      setLoadingAudio(false);
+      let url = await fetchR2Track(slug)   // Try R2 first
+      if (!url) url = await fetchStreamUrls(slug)   // Radio Browser fallback
+      if (url) audioManager.play(channelIndex, url)
+    } catch (e) {
+      console.error('playGenre failed:', e)
     }
+    setLoadingAudio(false)
   }
 
   // ── genre tap ─────────────────────────────────────────────────────────────

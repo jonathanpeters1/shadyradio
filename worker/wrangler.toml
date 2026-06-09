@@ -1,0 +1,21 @@
+# ShadyRadio Cloudflare Worker — R2 Audio Streaming API
+#
+# SETUP NOTES:
+# - Run `npx wrangler r2 bucket create shadyradio-audio` to create the bucket
+# - Upload audio as: npx wrangler r2 object put shadyradio-audio/house/track1.mp3 --file ./track1.mp3
+# - Set R2 bucket as public in Cloudflare dashboard to get the pub-*.r2.dev URL
+# - Then set R2_PUBLIC_URL below to that pub URL
+# - Deploy: npm run worker:deploy
+# - Update ../.env.local VITE_R2_BASE_URL to your deployed worker URL
+
+name = "shadyradio-api"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[[r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "shadyradio-audio"
+
+[vars]
+R2_PUBLIC_URL = "https://pub-xxxxxxxxxxxx.r2.dev"
+# Replace with your actual R2 public URL after enabling public access
