@@ -73,6 +73,16 @@ export default function SoundSystem() {
   const [chatOpen, setChatOpen]       = useState(false)
   const [crossfadeProgress, setCrossfadeProgress] = useState(0) // meter[18]
   const [activeBpm, setActiveBpm]     = useState(120) // meter[19]
+  const [channelData, setChannelData] = useState(Array(16).fill({
+    bpm: 0,
+    bpmLocked: false,
+    keyLabel: null,
+    phrasePhase: 0
+  }))
+
+  // VU meter refs
+  const vuCanvasRef = useRef(null)
+  const vuRafRef = useRef(0)
 
   const wsRef           = useRef(null)
   const mouthRafRef     = useRef(0)
@@ -100,10 +110,86 @@ export default function SoundSystem() {
       if (activeCh >= 0 && activeCh < 16) {
         setBass(meters[activeCh]);
       }
+
+      // Update per-channel data (BPM will be tracked per channel from WASM in future)
+      // For now, we only know active channel BPM
+      setChannelData(prev => {
+        const next = [...prev];
+        // Update active channel with known data
+        if (activeCh >= 0 && activeCh < 16) {
+          next[activeCh] = {
+            ...next[activeCh],
+            bpm: meters[19],
+            bpmLocked: meters[19] > 0, // Locked if we have a valid BPM
+            phrasePhase: meters[18] > 0 ? meters[18] : 0 // Use crossfade progress as proxy for now
+          };
+        }
+        return next;
+      });
     });
 
     return () => {
       audioManager.destroy();
+    };
+  }, []);
+
+  // ── VU meter animation loop ───────────────────────────────────────
+  useEffect(() => {
+    const canvas = vuCanvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    const barWidth = 6;
+    const gap = 4;
+    const height = 36;
+
+    // Set canvas size
+    canvas.width = barWidth * 2 + gap;
+    canvas.height = height;
+
+    function drawVU() {
+      const [rmsL, rmsR] = audioManager.getMasterRMS();
+
+      // Clear
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw left channel
+      const hL = Math.min(height, rmsL * height * 2); // Scale up for visibility
+      drawBar(ctx, 0, height - hL, barWidth, hL, rmsL);
+
+      // Draw right channel
+      const hR = Math.min(height, rmsR * height * 2);
+      drawBar(ctx, barWidth + gap, height - hR, barWidth, hR, rmsR);
+
+      vuRafRef.current = requestAnimationFrame(drawVU);
+    }
+
+    function drawBar(ctx, x, y, w, h, level) {
+      // Gradient: green (0-0.7) → yellow (0.7-0.9) → red (0.9+)
+      let color;
+      if (level < 0.7) {
+        color = '#22c55e'; // green
+      } else if (level < 0.9) {
+        color = '#eab308'; // yellow
+      } else {
+        color = '#ef4444'; // red
+      }
+
+      // Draw bar
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, w, h);
+
+      // Draw peak indicator line
+      const peakY = y;
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.fillRect(x, peakY, w, 1);
+    }
+
+    vuRafRef.current = requestAnimationFrame(drawVU);
+
+    return () => {
+      cancelAnimationFrame(vuRafRef.current);
     };
   }, []);
 
@@ -341,8 +427,11 @@ export default function SoundSystem() {
               isPlaying={isPlaying}
               fxMode={fxMode}
               dimmed={g.dimmed}
-              crossfadeProgress={crossfadeProgress}
-              bpm={activeChannel === i ? activeBpm : 0}
+              crossfadeProgress={activeChannel === i ? crossfadeProgress : 0}
+              bpm={channelData[i].bpm}
+              bpmLocked={channelData[i].bpmLocked}
+              keyLabel={channelData[i].keyLabel}
+              phrasePhase={channelData[i].phrasePhase}
               onTap={() => !gridMode && tapGenre(g.slug)}
             />
           ))}
@@ -459,7 +548,41 @@ export default function SoundSystem() {
 
         </div>
 
-        {/* ── chat — inline below buttons, no new window ── */}
+        {/* ── master VU + Shady input strip ─────────────────────────────── */}
+        <div className="ss-master-strip">
+          {/* Left: stereo VU meter */}
+          <div className="ss-vu-meter">
+            <canvas ref={vuCanvasRef} className="ss-vu-canvas" />
+          </div>
+
+          {/* Center: Shady input */}
+          <div className="ss-shady-center">
+            {shadyReply && shadyReply !== '...' && (
+              <div className="ss-shady-reply-bubble">{shadyReply}</div>
+            )}
+            <div className="ss-shady-input-wrap">
+              <input
+                type="text"
+                className="ss-shady-input"
+                placeholder="Ask Shady..."
+                value={shadyInput}
+                onChange={(e) => setShadyInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && sendToShady()}
+              />
+            </div>
+          </div>
+
+          {/* Right: Shady button */}
+          <button
+            className="ss-shady-send-btn"
+            onClick={() => sendToShady()}
+            disabled={shadyBusy || !shadyInput.trim()}
+          >
+            Ask
+          </button>
+        </div>
+
+        {/* ── chat panel (expandable) ── */}
         <ChatPanel
           isOpen={chatOpen}
           onClose={() => setChatOpen(false)}

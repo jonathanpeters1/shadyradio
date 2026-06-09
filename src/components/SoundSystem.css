@@ -175,24 +175,41 @@
   50%      { opacity: 0.4; transform: scale(0.7); }
 }
 
-/* ── crossfade progress bar ── */
-.ss-crossfade-bar {
-  position: absolute; bottom: 1.6rem; left: 0.35rem; right: 0.35rem;
-  height: 2px; background: rgba(0,0,0,0.5);
-  border-radius: 1px; overflow: hidden; z-index: 4;
-}
-.ss-crossfade-fill {
-  height: 100%; background: linear-gradient(90deg, #dc1e1e, #ff4444);
-  box-shadow: 0 0 4px rgba(220,30,30,0.8);
-  transition: width 0.05s linear;
+/* ── BPM badge (top-left, tiny monospace) ── */
+.ss-bpm-badge {
+  position: absolute; top: 0.3rem; left: 0.35rem;
+  font-size: 0.44rem; font-weight: 900;
+  letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.45);
+  z-index: 6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-/* ── BPM display on active speaker ── */
-.ss-cell-bpm {
-  display: inline-block; margin-left: 0.4rem;
-  font-size: 0.55rem; font-weight: 600;
-  color: #dc1e1e; opacity: 0.9;
-  text-shadow: 0 0 6px rgba(220,30,30,0.6);
+/* ── Camelot key badge (top-right) ── */
+.ss-key-badge {
+  position: absolute; top: 0.3rem; right: 0.35rem;
+  font-size: 0.44rem; font-weight: 900;
+  letter-spacing: 0.06em;
+  color: rgba(212,166,79,0.55);
+  z-index: 6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ── phrase progress bar (bottom edge, 0→1 over 8 bars) ── */
+.ss-phrase-bar {
+  position: absolute; bottom: 1.4rem; left: 0;
+  height: 2px; background: rgba(212,166,79,0.35);
+  transition: width 0.1s linear;
+  z-index: 6;
+}
+.ss-cell--active .ss-phrase-bar {
+  background: rgba(212,166,79,0.75);
+}
+
+/* ── crossfade progress bar (top edge, during crossfade) ── */
+.ss-crossfade-bar {
+  position: absolute; top: 0; left: 0;
+  height: 3px; background: rgba(255,140,60,0.8);
+  transition: width 0.08s linear;
+  z-index: 7;
 }
 
 /* ── 32-box modular overlay ── */
@@ -374,6 +391,88 @@
 }
 .ss-shady-btn:hover    { border-color: rgba(255,140,60,0.50); color: rgba(255,140,60,1); }
 .ss-shady-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── master strip: VU meter + Shady input ── */
+.ss-master-strip {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.35rem 0.75rem 0.45rem;
+  border-top: 1px solid rgba(255,140,60,0.10);
+}
+
+/* VU meter container */
+.ss-vu-meter {
+  flex-shrink: 0;
+  width: 16px; height: 36px;
+  background: rgba(0,0,0,0.5);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ss-vu-canvas {
+  width: 100%; height: 100%;
+  display: block;
+}
+
+/* Shady input center section */
+.ss-shady-center {
+  flex: 1;
+  display: flex; flex-direction: column; gap: 0.2rem;
+  position: relative;
+}
+.ss-shady-reply-bubble {
+  font-size: 0.55rem; color: rgba(255,140,60,0.80);
+  font-style: italic; line-height: 1.3;
+  margin-bottom: 0.15rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ss-shady-input-wrap {
+  display: flex; align-items: center;
+}
+.ss-shady-input {
+  flex: 1;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  padding: 0.35rem 0.55rem;
+  font-family: inherit;
+  font-size: 0.62rem;
+  letter-spacing: 0.03em;
+  color: rgba(255,255,255,0.80);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.ss-shady-input:focus {
+  border-color: rgba(255,140,60,0.40);
+}
+.ss-shady-input::placeholder {
+  color: rgba(255,255,255,0.25);
+  font-style: italic;
+}
+
+/* Shady send button (right side) */
+.ss-shady-send-btn {
+  flex-shrink: 0;
+  padding: 0.38rem 0.75rem;
+  background: rgba(255,140,60,0.08);
+  border: 1px solid rgba(255,140,60,0.30);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.52rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: rgba(255,140,60,0.75);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ss-shady-send-btn:hover {
+  border-color: rgba(255,140,60,0.55);
+  color: rgba(255,140,60,1);
+  background: rgba(255,140,60,0.12);
+}
+.ss-shady-send-btn:disabled {
+  opacity: 0.35; cursor: not-allowed;
+  border-color: rgba(255,140,60,0.15);
+}
 
 /* ── Shady Word Animations ── */
 .shady-word {

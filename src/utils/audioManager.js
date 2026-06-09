@@ -8,6 +8,9 @@ class AudioManager {
     this.wasmReady = false;
     this.meterCallback = null;
 
+    // Master output analyzer for VU meter
+    this.masterAnalyser = null;
+
     // WASM module buffer (will be fetched)
     this.wasmBuffer = null;
   }
@@ -52,8 +55,14 @@ class AudioManager {
         source.connect(this.workletNode, 0, i);
       }
 
-      // Connect worklet output to destination
-      this.workletNode.connect(this.audioContext.destination);
+      // Create master output analyzer for VU meter
+      this.masterAnalyser = this.audioContext.createAnalyser();
+      this.masterAnalyser.fftSize = 256;
+      this.masterAnalyser.smoothingTimeConstant = 0.3;
+
+      // Connect worklet output to analyzer, then to destination
+      this.workletNode.connect(this.masterAnalyser);
+      this.masterAnalyser.connect(this.audioContext.destination);
 
       // Send WASM to worklet for instantiation
       this.workletNode.port.postMessage({
@@ -202,6 +211,35 @@ class AudioManager {
     return this.audioContext ? this.audioContext.currentTime : 0;
   }
 
+  // Get master output RMS levels [L, R] for VU meter (0.0 - 1.0)
+  getMasterRMS() {
+    if (!this.masterAnalyser) return [0, 0];
+
+    const bufferLength = this.masterAnalyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength * 2); // Stereo = 2x
+
+    // Get time domain data (interleaved stereo)
+    this.masterAnalyser.getByteTimeDomainData(dataArray);
+
+    // Calculate RMS for left and right channels
+    let sumL = 0, sumR = 0;
+    const samplePairs = Math.floor(dataArray.length / 2);
+    const samplesToUse = Math.min(samplePairs, 128);
+
+    for (let i = 0; i < samplesToUse; i++) {
+      // Convert from 0-255 to -1 to 1
+      const valL = (dataArray[i * 2] - 128) / 128;
+      const valR = (dataArray[i * 2 + 1] - 128) / 128;
+      sumL += valL * valL;
+      sumR += valR * valR;
+    }
+
+    const rmsL = Math.sqrt(sumL / samplesToUse);
+    const rmsR = Math.sqrt(sumR / samplesToUse);
+
+    return [rmsL, rmsR];
+  }
+
   // Suspend audio context
   async suspend() {
     if (this.audioContext && this.audioContext.state === 'running') {
@@ -226,6 +264,11 @@ class AudioManager {
   // Cleanup
   destroy() {
     this.stopAll();
+
+    if (this.masterAnalyser) {
+      this.masterAnalyser.disconnect();
+      this.masterAnalyser = null;
+    }
 
     if (this.workletNode) {
       this.workletNode.disconnect();
