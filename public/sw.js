@@ -1,5 +1,5 @@
-const CACHE = 'shadyradio-v1'
-const PRECACHE = ['/', '/sf-logo.jpeg', '/woofer.png', '/concrete-bg.png']
+const CACHE = 'shadyradio-v2'
+const PRECACHE = ['/', '/sf-logo.jpeg', '/woofer.png', '/dsp/engine.js', '/dsp/engine.wasm']
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)))

@@ -1,0 +1,23 @@
+# ShadyRadio Cloudflare Pages Deployment Config
+#
+# To deploy:
+#   1. Install Cloudflare Tunnel on Mac Pro:
+#        brew install cloudflared
+#   2. Start the tunnel pointing to Shady server:
+#        cloudflared tunnel --url http://localhost:8099
+#      Copy the generated URL (e.g. https://xxxx.trycloudflare.com)
+#   3. Create .env.production with that URL as VITE_SHADY_URL
+#   4. Run: npm run deploy
+#      (First time: wrangler will prompt to create the Pages project)
+#   5. App lives at: https://shadyradio.pages.dev
+#
+# The tunnel URL changes each time you restart cloudflared. For a permanent
+# URL, create a named tunnel: cloudflared tunnel create shady
+
+name = "shadyradio"
+pages_build_output_dir = "dist"
+
+compatibility_date = "2024-01-01"
+
+[env.production.vars]
+VITE_R2_BASE_URL = "https://shadyradio-api.workers.dev"
