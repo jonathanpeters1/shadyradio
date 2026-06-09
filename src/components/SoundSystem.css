@@ -622,6 +622,21 @@
   to   { box-shadow: 0 0 0 4px rgba(255,140,60,0.35); }
 }
 
+/* ── shadow channel indicator ── */
+.ss-cell--shadow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(212,166,79,0.15);
+  z-index: 6;
+  pointer-events: none;
+  animation: shadow-breathe 3s ease-in-out infinite;
+}
+@keyframes shadow-breathe {
+  0%, 100% { border-color: rgba(212,166,79,0.08); }
+  50%       { border-color: rgba(212,166,79,0.25); }
+}
+
 /* ── now playing strip ── */
 .ss-now-playing {
   position: absolute;

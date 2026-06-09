@@ -135,8 +135,13 @@ class AudioManager {
       this.workletNode.port.onmessage = (e) => {
         switch (e.data.type) {
           case 'ready':
-            this.wasmReady = true;
-            console.log('WASM engine ready');
+            this.wasmReady = true
+            console.log('%c[SF Engine] WASM ready', 'color:#d4a64f;font-weight:bold')
+            console.log('  AudioContext sampleRate:', this.audioContext?.sampleRate)
+            console.log('  AudioContext state:', this.audioContext?.state)
+            console.log('  WorkletNode inputs:', this.workletNode?.numberOfInputs)
+            console.log('  WorkletNode outputs:', this.workletNode?.numberOfOutputs)
+            console.log('  FX chain: dry=%o wet=%o', this.dryGain?.gain.value, this.wetGain?.gain.value)
             break;
           case 'error':
             console.error('WASM error:', e.data.message);
@@ -337,6 +342,13 @@ class AudioManager {
     }
 
     console.log('Disconnected channel', index);
+  }
+
+  // Set HTML element volume independently (for shadow channels)
+  setChannelVolume(index, volume) {
+    // volume 0.0-1.0 — controls HTMLAudioElement output level
+    const ch = this.channels[index]
+    if (ch?.element) ch.element.volume = Math.max(0, Math.min(1, volume))
   }
 
   // Set channel gain in dB

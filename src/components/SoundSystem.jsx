@@ -7,6 +7,7 @@ import ShadyProps from './ShadyProps'
 import ChatPanel from './ChatPanel'
 import ProPanel from './ProPanel'
 import SFSpectrum from './SFSpectrum'
+import DiagPanel from './DiagPanel'
 import audioManager from '../audio/audioManager'
 import './SoundSystem.css'
 
@@ -108,6 +109,10 @@ export default function SoundSystem() {
   // PWA install prompt
   const [installPrompt, setInstallPrompt] = useState(null)
 
+  // Shadow channels (pre-loaded for automix crossfading)
+  const [shadowChannels, setShadowChannels] = useState([])
+  const shadowLoadingRef = useRef(false)
+
   // Show clock state
   const [setDuration, setSetDuration] = useState(0)
   const showStartRef = useRef(null)
@@ -128,6 +133,17 @@ export default function SoundSystem() {
   const audioRafRef     = useRef(0)
   const isPlayingRef    = useRef(false)
 
+  // Diagnostic overlay
+  const [diagOpen, setDiagOpen]   = useState(false)
+  const logoTapRef                = useRef(0)
+  const lastMetersRef             = useRef(Array(20).fill(0))
+  const [lastMeters, setLastMeters] = useState(Array(20).fill(0))
+
+  // Shadow channel pre-loading for automix
+  const [shadowChannels, setShadowChannels] = useState([])
+  const shadowLoadingRef = useRef(false)
+  const shadowChannelsRef = useRef([])
+
   // Stream retry recovery
   const retryCountRef = useRef(Array(16).fill(0))
 
@@ -139,10 +155,16 @@ export default function SoundSystem() {
   // sync ref on every render — no stale closure in RAF loops
   isPlayingRef.current = isPlaying
 
+  // sync shadowChannelsRef so meter callback has fresh access
+  useEffect(() => { shadowChannelsRef.current = shadowChannels }, [shadowChannels])
+
   // ── audio manager setup + meter bridge ─────────────────────────────
   useEffect(() => {
     // Set up meter callback from WASM engine
     audioManager.onMeterUpdate((meters) => {
+      // Store raw meter array for diagnostic panel
+      setLastMeters([...meters])
+
       // meters[0-15] = channel RMS, [16] = active_channel, [17] = pending_channel
       // [18] = crossfade_progress, [19] = active_bpm
       const activeCh = Math.round(meters[16]);
@@ -175,12 +197,27 @@ export default function SoundSystem() {
         return next;
       });
 
-      // Detect active channel change (crossfade completed) for Shady commentary
+      // Detect active channel change (crossfade completed)
       const prevCh = prevActiveChannelRef.current
       if (activeCh !== prevCh && prevCh !== -1 && activeCh >= 0) {
-        // Active channel just changed — crossfade completed
         prevActiveChannelRef.current = activeCh
-        setTimeout(() => autoShady('crossfade'), 800)  // brief delay so audio settles
+
+        // If the new active channel was a shadow, bring it to full volume
+        // and silence the old primary
+        if (shadowChannelsRef.current.includes(activeCh)) {
+          audioManager.setChannelVolume(activeCh, 1.0)
+          audioManager.setChannelVolume(prevCh, 0.0)
+          setActive(GENRES[activeCh]?.slug || null)
+          setShadowChannels(prev => {
+            const next = prev.filter(i => i !== activeCh)
+            if (!next.includes(prevCh)) next.push(prevCh)
+            return next
+          })
+          // Load a new shadow to replace the one that just became primary
+          setTimeout(() => loadShadowChannels(GENRES[activeCh]?.slug), 3000)
+        }
+
+        setTimeout(() => autoShady('crossfade'), 800)
       } else if (prevCh === -1 && activeCh >= 0) {
         prevActiveChannelRef.current = activeCh
       }
@@ -474,6 +511,48 @@ export default function SoundSystem() {
     return station?.url_resolved || null
   }
 
+  // Pick 2 shadow genres: one similar (adjacent), one contrast (far in list)
+  function pickShadowGenres(activeSlug) {
+    const activeIdx = GENRES.findIndex(g => g.slug === activeSlug)
+    const similar   = GENRES[(activeIdx + 2) % GENRES.length]
+    const contrast  = GENRES[(activeIdx + 8) % GENRES.length]
+    return [similar.slug, contrast.slug]
+  }
+
+  // Load shadow channels silently for automix
+  async function loadShadowChannels(activeSlug) {
+    if (shadowLoadingRef.current) return
+    shadowLoadingRef.current = true
+
+    const slugs = pickShadowGenres(activeSlug)
+    const newShadows = []
+
+    for (const slug of slugs) {
+      const idx = GENRES.findIndex(g => g.slug === slug)
+      if (idx < 0) continue
+      try {
+        let url = await fetchR2Track(slug)
+        if (!url) url = await fetchStreamUrls(slug)
+        if (!url) continue
+
+        // Play at volume 0 — silent to user, active in WASM
+        audioManager.play(idx, url)
+        audioManager.setChannelVolume(idx, 0.0)
+        newShadows.push(idx)
+      } catch (e) {
+        console.warn('Shadow load failed for', slug, e)
+      }
+    }
+
+    setShadowChannels(newShadows)
+    shadowLoadingRef.current = false
+  }
+
+  function stopShadowChannels() {
+    shadowChannels.forEach(idx => audioManager.stop(idx))
+    setShadowChannels([])
+  }
+
   async function playGenre(slug, channelIndex) {
     setLoadingAudio(true)
 
@@ -502,6 +581,8 @@ export default function SoundSystem() {
       audioManager.stop(channelIndex);
       setActive(null);
       setIsPlaying(false);
+      // Stop shadow channels too
+      stopShadowChannels()
     } else {
       // Stop any currently playing channel
       if (active) {
@@ -524,6 +605,12 @@ export default function SoundSystem() {
 
       // Reset retry count on successful play
       retryCountRef.current[channelIndex] = 0
+
+      // Set the primary channel to full volume
+      audioManager.setChannelVolume(channelIndex, 1.0)
+
+      // Load shadow channels 2 seconds after primary starts
+      setTimeout(() => loadShadowChannels(slug), 2000)
     }
   }
 
@@ -553,6 +640,7 @@ export default function SoundSystem() {
 
   // ── skip / stop ───────────────────────────────────────────────────────────
   function skipStop() {
+    stopShadowChannels()
     if (active) {
       const ch = GENRES.findIndex(g => g.slug === active)
       if (ch >= 0) audioManager.stop(ch)
@@ -597,7 +685,8 @@ export default function SoundSystem() {
     if (!text || shadyBusy) return
     setShadyBusy(true); setShadyInput(''); setShadyReply('...')
     try {
-      const res = await fetch('/api/shady', {
+      const SHADY_BASE = import.meta.env.VITE_SHADY_URL || ''
+      const res = await fetch(`${SHADY_BASE}/api/shady`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),
@@ -636,7 +725,7 @@ export default function SoundSystem() {
       // duck music while Shady speaks
       if (audioRef.current) audioRef.current.volume = 0.18
 
-      const speakRes = await fetch('/api/synthesize', {
+      const speakRes = await fetch(`${SHADY_BASE}/api/synthesize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: reply }),
@@ -733,6 +822,47 @@ export default function SoundSystem() {
     sendToShady(prompt)
   }
 
+  // ── Shadow channel helpers ────────────────────────────────────────────────
+  function pickShadowGenres(activeSlug) {
+    const pool = GENRES.filter(g => g.slug !== activeSlug)
+    const activeIdx = GENRES.findIndex(g => g.slug === activeSlug)
+    const similar  = GENRES[(activeIdx + 2) % GENRES.length]
+    const contrast = GENRES[(activeIdx + 8) % GENRES.length]
+    return [similar.slug, contrast.slug]
+  }
+
+  async function loadShadowChannels(activeSlug) {
+    if (shadowLoadingRef.current) return
+    shadowLoadingRef.current = true
+
+    const slugs = pickShadowGenres(activeSlug)
+    const newShadows = []
+
+    for (const slug of slugs) {
+      const idx = GENRES.findIndex(g => g.slug === slug)
+      if (idx < 0) continue
+      try {
+        let url = await fetchR2Track(slug)
+        if (!url) url = await fetchStreamUrls(slug)
+        if (!url) continue
+
+        audioManager.play(idx, url)
+        audioManager.setChannelVolume(idx, 0.0)
+        newShadows.push(idx)
+      } catch (e) {
+        console.warn('Shadow load failed for', slug, e)
+      }
+    }
+
+    setShadowChannels(newShadows)
+    shadowLoadingRef.current = false
+  }
+
+  function stopShadowChannels() {
+    shadowChannels.forEach(idx => audioManager.stop(idx))
+    setShadowChannels([])
+  }
+
   // ── Pro panel handlers ───────────────────────────────────────────────
   function handleGainChange(idx, db) {
     setChannelGains(prev => { const n = [...prev]; n[idx] = db; return n })
@@ -757,7 +887,15 @@ export default function SoundSystem() {
       {/* ── header ── */}
       <header className="ss-header">
         <div className="ss-logo">
-          <img src="/sf-logo.jpeg" alt="SF" className="ss-logo-img" />
+          <img src="/sf-logo.jpeg" alt="SF" className="ss-logo-img"
+            onClick={() => {
+              if (!import.meta.env.DEV) return
+              logoTapRef.current++
+              if (logoTapRef.current >= 5) {
+                logoTapRef.current = 0
+                setDiagOpen(v => !v)
+              }
+            }}/>
           <span className="ss-logo-text">SF</span>
         </div>
         <p className="ss-header-title">· SOUNDFACTORY ·</p>
@@ -872,6 +1010,7 @@ export default function SoundSystem() {
               keyLabel={channelData[i].keyLabel}
               phrasePhase={channelData[i].phrasePhase}
               pending={pendingChannel === i && crossfadeProgress > 0 && crossfadeProgress < 1}
+              shadow={shadowChannels.includes(i)}
               onTap={() => !gridMode && tapGenre(g.slug)}
             />
           ))}
@@ -1063,6 +1202,19 @@ export default function SoundSystem() {
       {particleBurst && (
         <div className="particle-burst"
           style={{ left: `${particleBurst.x}%`, top: `${particleBurst.y}%` }} />
+      )}
+
+      {/* ── diagnostic overlay ── */}
+      {import.meta.env.DEV && diagOpen && (
+        <DiagPanel
+          meters={lastMeters}
+          activeChannel={activeChannel}
+          pendingChannel={pendingChannel}
+          crossfadeProgress={crossfadeProgress}
+          activeBpm={activeBpm}
+          shadowChannels={shadowChannels}
+          onClose={() => setDiagOpen(false)}
+        />
       )}
 
       {/* ── pro mixer panel ── */}
