@@ -36,12 +36,12 @@ const GENRES = [
   { name: 'Indie Dance',              slug: 'indie-dance' },
   { name: 'Techno Peak',              slug: 'techno-peak' },
   { name: 'Techno Raw',               slug: 'techno-raw' },
-  { name: 'Hard Techno',              slug: 'hard-techno' },
+  { name: 'Deep Tech',                slug: 'hard-techno' },
   { name: 'Minimal Deep Tech',        slug: 'minimal-deep-tech' },
   { name: 'Nu Disco',                 slug: 'nu-disco' },
   { name: 'JP Sets',                  slug: 'jp-sets' },
   { name: 'JP Classics',              slug: 'jp-classics' },
-  { name: 'Amapiano',                 slug: 'amapiano' },
+  { name: 'Disco',                    slug: 'amapiano' },
   { name: 'Soulful Funk & Disco',     slug: 'soul-funk-disco' },
 ]
 
@@ -507,13 +507,8 @@ export default function SoundSystem() {
   }
 
   async function fetchStreamUrls(slug) {
-    const tag = GENRE_TAGS[slug] || slug
-    const res = await fetch(
-      `https://de1.api.radio-browser.info/json/stations/bytag/${encodeURIComponent(tag)}?limit=5&hidebroken=true&order=clickcount&reverse=true`
-    )
-    const stations = await res.json()
-    const station = stations.find(s => s.url_resolved) || stations[0]
-    return station?.url_resolved || null
+    // Radio Browser removed — use R2 tracks only
+    return null
   }
 
   // Pick 2 shadow genres: one similar (adjacent), one contrast (far in list)
@@ -543,8 +538,10 @@ export default function SoundSystem() {
         if (!url) continue
 
         // Play at volume 0 — silent to user, active in WASM
-        audioManager.play(idx, url, meta)
-        audioManager.setChannelVolume(idx, 0.0)
+        // Use onReady callback to set volume AFTER audio is actually playing
+        audioManager.play(idx, url, meta, (channelIdx) => {
+          audioManager.setChannelVolume(channelIdx, 0.0)
+        })
         newShadows.push(idx)
       } catch (e) {
         console.warn('Shadow load failed for', slug, e)
@@ -586,6 +583,9 @@ export default function SoundSystem() {
       }
     } catch (e) {
       console.error('playGenre failed:', e)
+      // Show error to user
+      setShadyReply(`Stream failed: ${e.message}`)
+      setIsPlaying(false)
     }
     setLoadingAudio(false)
   }
