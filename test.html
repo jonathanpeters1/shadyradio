@@ -2,207 +2,259 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>DSP Cycle Test</title>
+  <title>ShadyRadio Mix Test</title>
   <style>
-    body { font-family: monospace; background: #000; color: #0f0; padding: 40px; text-align: center; }
-    button { font-size: 32px; padding: 20px 40px; background: #0f0; color: #000; border: none; cursor: pointer; }
-    button:hover { background: #0a0; }
-    #status { font-size: 20px; margin-top: 30px; line-height: 1.6; }
-    .track { color: #0ff; font-size: 28px; }
-    .bar { color: #ff0; }
-    .mixing { color: #f00; font-weight: bold; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #000; color: #d4a64f; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 20px; padding: 20px; }
+    h1 { color: #fff; letter-spacing: 4px; font-size: 20px; }
+    select { font-size: 16px; padding: 10px 16px; background: #111; color: #d4a64f; border: 1px solid #d4a64f; border-radius: 4px; font-family: monospace; }
+    #startBtn { font-size: 26px; padding: 18px 60px; background: #d4a64f; color: #000; border: none; cursor: pointer; border-radius: 6px; font-family: monospace; font-weight: bold; }
+    #startBtn:hover { background: #f0c060; }
+    #startBtn:disabled { background: #333; color: #666; cursor: default; }
+    #info { font-size: 15px; color: #aaa; text-align: center; line-height: 2.2; min-height: 130px; }
+    .track { color: #fff; font-size: 17px; }
+    .bpm { color: #d4a64f; }
+    .bars { color: #0ff; }
+    .mixing { color: #f55; font-size: 18px; font-weight: bold; }
+    .loading { color: #888; }
+    #vu { display: flex; gap: 3px; align-items: flex-end; height: 50px; }
+    .vb { width: 14px; background: #1a1a1a; height: 100%; position: relative; border-radius: 2px; overflow: hidden; }
+    .vf { position: absolute; bottom: 0; width: 100%; background: linear-gradient(to top, #0f0 0%, #ff0 60%, #f00 100%); transition: height 0.05s; height: 0%; }
+    #grid { font-size: 11px; color: #444; margin-top: 4px; }
   </style>
 </head>
 <body>
-  <h1>DSP Cycle — 5 Tracks, 32 Bars</h1>
-  <button id="start">START</button>
-  <div id="status">Click START to begin</div>
+  <h1>SHADYRADIO</h1>
+  <select id="genreSelect">
+    <option value="tech-house">Tech House (31 tracks)</option>
+    <option value="jackin-house">Jackin House (57 tracks)</option>
+    <option value="house">House</option>
+    <option value="afro-house">Afro House</option>
+    <option value="deep-house">Deep House</option>
+  </select>
+  <button id="startBtn">▶ START MIX</button>
+  <div id="info">Pick a genre and hit START.</div>
+  <div id="vu"></div>
+  <div id="grid"></div>
 
-  <script>
-    const TRACKS = [
-      '/audio/test-track-1.mp3',
-      '/audio/test-track-2.mp3',
-      '/audio/test-track-3.mp3',
-      '/audio/test-track-4.mp3',
-      '/audio/test-track-5.mp3'
-    ];
+<script>
+const AUDIO_SERVER = ''  // proxied through Vite — same origin, no CORS
+const BARS_PLAY  = 16   // bars to play before crossfade
+const BARS_XFADE = 8    // crossfade length in bars
+const XFADE_STEPS = 50
 
-    const BPM = 120;
-    const SECONDS_PER_BEAT = 60 / BPM;
-    const BARS_PER_TRACK = 32;
-    const BEATS_PER_BAR = 4;
-    const CROSSFADE_SECONDS = 2;
-    const SECONDS_PER_TRACK = BARS_PER_TRACK * BEATS_PER_BAR * SECONDS_PER_BEAT; // 64 seconds
+let ctx, worklet, running = false
+let playlist = [], idx = 0
+let activeCh = 0
+let sources = [null, null]
+let meterVals = new Float32Array(20)
+let barCount = 0, barTimer = null, vuRaf = null
+let masterBpm = null   // locked to first track; all others pitch-shift to match
 
-    let audioCtx = null;
-    let worklet = null;
-    let currentTrackIdx = 0;
-    let isPlaying = false;
-    let barInterval = null;
+const infoEl   = document.getElementById('info')
+const startBtn = document.getElementById('startBtn')
+const vuEl     = document.getElementById('vu')
+const gridEl   = document.getElementById('grid')
 
-    const statusEl = document.getElementById('status');
+for (let i = 0; i < 16; i++) {
+  const b = document.createElement('div'); b.className = 'vb'
+  const f = document.createElement('div'); f.className = 'vf'
+  b.appendChild(f); vuEl.appendChild(b)
+}
 
-    async function initDSP() {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      await audioCtx.resume();
-
-      await audioCtx.audioWorklet.addModule('/audio/engine.worklet.js');
-      worklet = new AudioWorkletNode(audioCtx, 'sf-engine', {
-        numberOfInputs: 16,
-        numberOfOutputs: 1,
-        outputChannelCount: [2]
-      });
-
-      const wasmResponse = await fetch('/dsp/engine.wasm');
-      const wasmBuffer = await wasmResponse.arrayBuffer();
-
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('WASM timeout')), 5000);
-        worklet.port.onmessage = (e) => {
-          if (e.data.type === 'ready') {
-            clearTimeout(timeout);
-            resolve();
-          } else if (e.data.type === 'error') {
-            clearTimeout(timeout);
-            reject(new Error(e.data.message));
-          }
-        };
-        worklet.port.postMessage({ type: 'init-wasm', buffer: wasmBuffer });
-      });
-
-      worklet.connect(audioCtx.destination);
+// Drift-corrected wait — wakes up within ~4ms of target AudioContext time
+function waitUntil(t) {
+  return new Promise(r => {
+    function check() {
+      const ms = (t - ctx.currentTime) * 1000
+      if (ms <= 6) return r()
+      setTimeout(check, Math.max(4, ms - 6))
     }
+    check()
+  })
+}
 
-    function playTrackOnChannel(trackIdx, channelIdx) {
-      const audio = new Audio(TRACKS[trackIdx]);
-      audio.crossOrigin = 'anonymous';
-      audio.preload = 'auto';
+function cleanName(n) {
+  return n.replace(/\.wav$/i,'').replace(/^\d+[A-Za-z#]+\s*[-–]\s*/,'').trim()
+}
 
-      const source = audioCtx.createMediaElementSource(audio);
-      source.connect(worklet, 0, channelIdx);
+function showInfo(track, bpm, mixing, intoName) {
+  const name = cleanName(track.name)
+  const rate = (masterBpm && bpm) ? (masterBpm / bpm).toFixed(3) : '1.000'
+  infoEl.innerHTML = `
+    <div class="track">${name}</div>
+    <div class="bpm">♩ ${bpm.toFixed(1)} BPM  (rate ${rate}×)</div>
+    <div class="bars" id="bardisp">Bar ${barCount}</div>
+    ${mixing
+      ? `<div class="mixing">→ ${intoName}</div>`
+      : `<div class="loading">next loading...</div>`}
+  `
+}
 
-      worklet.port.postMessage({ type: 'set-active', channel: channelIdx, value: 1 });
-      worklet.port.postMessage({ type: 'set-gain', channel: channelIdx, value: 1.0 });
+function startBarClock(barDurationSec) {
+  clearInterval(barTimer); barCount = 1
+  barTimer = setInterval(() => {
+    barCount++
+    const el = document.getElementById('bardisp')
+    if (el) el.textContent = `Bar ${barCount}`
+  }, barDurationSec * 1000)
+}
 
-      return { audio, source };
+// when     = AudioContext scheduled start time (default: now)
+// offset   = buffer seek in seconds (places bar 1 of track at `when`)
+// trackBpm = source BPM, adjusted to masterBpm via playbackRate
+function playBuffer(buffer, ch, gain, when, offset, trackBpm) {
+  if (sources[ch]) { try { sources[ch].stop() } catch(e) {} sources[ch].disconnect() }
+  const src = ctx.createBufferSource()
+  src.buffer = buffer
+  // Tempo-lock: pitch up/down to match master BPM (VDJ-style beat matching)
+  if (masterBpm && trackBpm && Math.abs(masterBpm - trackBpm) > 0.05) {
+    src.playbackRate.value = masterBpm / trackBpm
+  }
+  src.connect(worklet, 0, ch)
+  sources[ch] = src
+  worklet.port.postMessage({ type: 'set-active', channel: ch, value: 1 })
+  worklet.port.postMessage({ type: 'set-gain',   channel: ch, value: gain })
+  const t = when ?? ctx.currentTime
+  src.start(t, Math.max(0, offset ?? 0))
+  return t
+}
+
+function fadeChannel(ch, from, to, durationMs) {
+  const step = durationMs / XFADE_STEPS
+  for (let i = 0; i <= XFADE_STEPS; i++) {
+    setTimeout(() => {
+      if (!running) return
+      const g = from + (to - from) * (1 - Math.cos((i / XFADE_STEPS) * Math.PI)) / 2
+      worklet.port.postMessage({ type: 'set-gain', channel: ch, value: g })
+    }, i * step)
+  }
+}
+
+function stopCh(ch) {
+  if (sources[ch]) { try { sources[ch].stop() } catch(e) {} sources[ch].disconnect(); sources[ch] = null }
+  worklet.port.postMessage({ type: 'set-active', channel: ch, value: 0 })
+  worklet.port.postMessage({ type: 'set-gain',   channel: ch, value: 0 })
+}
+
+function startVU() {
+  const fills = vuEl.querySelectorAll('.vf')
+  const tick = () => {
+    if (!running) return
+    for (let i = 0; i < 16; i++)
+      fills[i].style.height = Math.min(100, (meterVals[i] || 0) * 400) + '%'
+    vuRaf = requestAnimationFrame(tick)
+  }
+  tick()
+}
+
+async function fetchDecode(url) {
+  const r = await fetch(url)
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${url}`)
+  return ctx.decodeAudioData(await r.arrayBuffer())
+}
+
+async function startMix() {
+  running = true
+  startBtn.disabled = true
+  const genre = document.getElementById('genreSelect').value
+  infoEl.innerHTML = '<div class="loading">Initializing DSP...</div>'
+
+  ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 })
+  await ctx.resume()
+  await ctx.audioWorklet.addModule('/audio/engine.worklet.js')
+  worklet = new AudioWorkletNode(ctx, 'sf-engine', {
+    numberOfInputs: 16, numberOfOutputs: 1, outputChannelCount: [2]
+  })
+  worklet.connect(ctx.destination)
+  worklet.port.onmessage = e => {
+    if (e.data.type === 'meter') meterVals = e.data.values
+  }
+
+  infoEl.innerHTML = '<div class="loading">Loading WASM DSP...</div>'
+  const wasmBuf = await (await fetch('/dsp/engine.wasm')).arrayBuffer()
+  await new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error('WASM timeout')), 8000)
+    const orig = worklet.port.onmessage
+    worklet.port.onmessage = e => {
+      orig(e)
+      if (e.data.type === 'ready') { clearTimeout(t); res() }
+      if (e.data.type === 'error') { clearTimeout(t); rej(new Error(e.data.message)) }
     }
+    worklet.port.postMessage({ type: 'init-wasm', buffer: wasmBuf })
+  })
 
-    function fadeChannel(channelIdx, fromGain, toGain, duration) {
-      const steps = 20;
-      const stepTime = (duration * 1000) / steps;
-      for (let i = 0; i <= steps; i++) {
-        setTimeout(() => {
-          const t = i / steps;
-          const gain = fromGain + (toGain - fromGain) * t;
-          worklet.port.postMessage({ type: 'set-gain', channel: channelIdx, value: gain });
-        }, i * stepTime);
-      }
-    }
+  infoEl.innerHTML = `<div class="loading">Fetching ${genre} playlist...</div>`
+  const all = await (await fetch(`${AUDIO_SERVER}/api/playlist/${genre}`)).json()
+  // Only use tracks with real v6 beat grid data
+  const analyzed = all.filter(t => t.barDurationSec && t.barDurationSec > 0)
+  if (analyzed.length === 0) throw new Error('No analyzed tracks found in this genre')
+  playlist = analyzed.sort(() => Math.random() - 0.5)
+  idx = 0
 
-    function stopChannel(channelIdx) {
-      worklet.port.postMessage({ type: 'set-active', channel: channelIdx, value: 0 });
-      worklet.port.postMessage({ type: 'set-gain', channel: channelIdx, value: 0 });
-    }
+  // Master BPM = first track — all others adjust playbackRate to match
+  masterBpm = playlist[0].bpm
+  gridEl.textContent = `master: ${masterBpm.toFixed(1)} BPM  |  ${analyzed.length} tracks with beat grid`
 
-    async function cycleTracks() {
-      isPlaying = true;
-      document.getElementById('start').style.display = 'none';
+  infoEl.innerHTML = `<div class="loading">Loading first track...</div>`
+  let curBuf = await fetchDecode(playlist[0].url)
 
-      let activeChannel = 0;
-      let channelA = null;
-      let channelB = null;
+  activeCh = 0
+  const firstStart = playBuffer(curBuf, activeCh, 1.0, null, playlist[0].gridOffsetSec, playlist[0].bpm)
+  startBarClock(playlist[0].barDurationSec)
+  startVU()
 
-      function updateDisplay(trackIdx, isMixing) {
-        const mixingHtml = isMixing ? '<br><span class="mixing">MIXING...</span>' : '';
-        statusEl.innerHTML = `
-          <div class="track">Track ${trackIdx + 1} / ${TRACKS.length}</div>
-          <div class="bar" id="bar-display">Bar 1 / ${BARS_PER_TRACK}</div>
-          <div>BPM: ${BPM}</div>
-          ${mixingHtml}
-        `;
-      }
+  async function nextCycle(trackStartTime) {
+    if (!running) return
+    const cur  = playlist[idx]
+    const next = playlist[(idx + 1) % playlist.length]
+    const bpm  = cur.bpm
 
-      function startBarCounter() {
-        let bar = 1;
-        if (barInterval) clearInterval(barInterval);
-        barInterval = setInterval(() => {
-          if (!isPlaying) {
-            clearInterval(barInterval);
-            return;
-          }
-          const barDisplay = document.getElementById('bar-display');
-          if (barDisplay) {
-            barDisplay.innerHTML = `Bar ${bar} / ${BARS_PER_TRACK}`;
-          }
-          bar++;
-          if (bar > BARS_PER_TRACK) bar = 1;
-        }, BEATS_PER_BAR * SECONDS_PER_BEAT * 1000);
-      }
+    // masterBpm bar duration (all tracks play at this rate due to playbackRate)
+    const barDur   = (60 / masterBpm) * 4
+    const xfadeAt  = trackStartTime + BARS_PLAY * barDur
+    const xfadeDur = BARS_XFADE * barDur
 
-      function scheduleNext() {
-        const nextTrackIdx = (currentTrackIdx + 1) % TRACKS.length;
-        const nextChannel = activeChannel === 0 ? 1 : 0;
+    showInfo(cur, bpm, false, '')
 
-        // Schedule crossfade before track ends
-        setTimeout(() => {
-          // Load next track on other channel
-          if (nextChannel === 0) {
-            channelA = playTrackOnChannel(nextTrackIdx, 0);
-            channelA.audio.play();
-          } else {
-            channelB = playTrackOnChannel(nextTrackIdx, 1);
-            channelB.audio.play();
-          }
+    // Load next track in background
+    let nextBuf
+    const load = fetchDecode(next.url).then(b => { nextBuf = b }).catch(e => console.error(e))
 
-          updateDisplay(nextTrackIdx, true);
+    await waitUntil(xfadeAt)
+    if (!running) return
 
-          // Crossfade
-          fadeChannel(activeChannel, 1.0, 0.0, CROSSFADE_SECONDS);
-          fadeChannel(nextChannel, 0.0, 1.0, CROSSFADE_SECONDS);
+    showInfo(cur, bpm, true, cleanName(next.name))
+    await load
+    if (!nextBuf || !running) { idx = (idx + 1) % playlist.length; return nextCycle(ctx.currentTime) }
 
-          // Stop old channel after fade
-          setTimeout(() => {
-            stopChannel(activeChannel);
-            if (activeChannel === 0 && channelA) {
-              channelA.audio.pause();
-              channelA.audio = null;
-            } else if (activeChannel === 1 && channelB) {
-              channelB.audio.pause();
-              channelB.audio = null;
-            }
+    const xfadeCh = activeCh === 0 ? 1 : 0
+    // Start incoming track at the crossfade bar, seeked to its grid offset
+    // so its bar 1 lands exactly on the master bar boundary
+    const nextStart = playBuffer(nextBuf, xfadeCh, 0.0, xfadeAt, next.gridOffsetSec, next.bpm)
 
-            activeChannel = nextChannel;
-            currentTrackIdx = nextTrackIdx;
-            updateDisplay(currentTrackIdx, false);
+    fadeChannel(activeCh,  1.0, 0.0, xfadeDur * 1000)
+    fadeChannel(xfadeCh,   0.0, 1.0, xfadeDur * 1000)
 
-            // Schedule next
-            scheduleNext();
-          }, CROSSFADE_SECONDS * 1000);
+    await waitUntil(xfadeAt + xfadeDur)
+    if (!running) return
 
-        }, (SECONDS_PER_TRACK - CROSSFADE_SECONDS) * 1000);
-      }
+    stopCh(activeCh)
+    activeCh = xfadeCh
+    idx = (idx + 1) % playlist.length
+    startBarClock(barDur)
+    nextCycle(nextStart)
+  }
 
-      // Start first track
-      channelA = playTrackOnChannel(0, 0);
-      channelA.audio.addEventListener('canplaythrough', () => {
-        channelA.audio.play();
-        updateDisplay(0, false);
-        startBarCounter();
-        scheduleNext();
-      }, { once: true });
-    }
+  nextCycle(firstStart)
+}
 
-    document.getElementById('start').addEventListener('click', async () => {
-      try {
-        statusEl.innerHTML = 'Initializing...';
-        await initDSP();
-        await cycleTracks();
-      } catch (e) {
-        statusEl.innerHTML = 'ERROR: ' + e.message;
-        statusEl.style.color = '#f00';
-        console.error(e);
-      }
-    });
-  </script>
+startBtn.addEventListener('click', () => {
+  startMix().catch(e => {
+    infoEl.innerHTML = `<div style="color:#f55">ERROR: ${e.message}</div>`
+    console.error(e); startBtn.disabled = false; running = false
+  })
+})
+</script>
 </body>
 </html>

@@ -1,30 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
-import SpeakerCell from './SpeakerCell'
-import SFParticleField from './SFParticleField'
-import SFCamera from './SFCamera'
-import ShadyStage from './ShadyStage'
-import ShadyProps from './ShadyProps'
-import ChatPanel from './ChatPanel'
-import ProPanel from './ProPanel'
-import SFSpectrum from './SFSpectrum'
-import DiagPanel from './DiagPanel'
+import GridTool from './GridTool'
 import audioManager from '../audio/audioManager'
 import './SoundSystem.css'
-
-// Update CarPlay / Media Session metadata
-function updateMediaSession(genreName, bpm, isPlaying) {
-  if (!('mediaSession' in navigator)) return
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: genreName || 'Shady Radio',
-    artist: 'Shady — SoundFactory',
-    album: bpm > 0 ? `${Math.round(bpm)} BPM` : 'Auto-DJ',
-    artwork: [
-      { src: '/sf-logo.jpeg', sizes: '192x192', type: 'image/jpeg' },
-      { src: '/sf-logo.jpeg', sizes: '512x512', type: 'image/jpeg' },
-    ]
-  })
-  navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused'
-}
 
 const GENRES = [
   { name: 'House',                    slug: 'house' },
@@ -42,1200 +19,181 @@ const GENRES = [
   { name: 'JP Sets',                  slug: 'jp-sets' },
   { name: 'JP Classics',              slug: 'jp-classics' },
   { name: 'Disco',                    slug: 'amapiano' },
-  { name: 'Soulful Funk & Disco',     slug: 'soul-funk-disco' },
+  { name: 'Soulful & Funk',           slug: 'soul-funk-disco' },
 ]
 
-// Radio Browser API tag per genre
-const GENRE_TAGS = {
-  'house':                'house',
-  'afro-house':           'afro house',
-  'deep-house':           'deep house',
-  'tech-house':           'tech house',
-  'jackin-house':         'jackin house',
-  'melodic-house-techno': 'melodic techno',
-  'indie-dance':          'indie dance',
-  'techno-peak':          'techno',
-  'techno-raw':           'techno',
-  'hard-techno':          'hard techno',
-  'minimal-deep-tech':    'minimal techno',
-  'nu-disco':             'nu disco',
-  'jp-sets':              'house',
-  'jp-classics':          'soulful house',
-  'amapiano':             'amapiano',
-  'soul-funk-disco':      'funk',
-}
-
-const VOCAL_SLUGS = new Set([
-  'house','afro-house','jackin-house','indie-dance',
-  'nu-disco','jp-sets','jp-classics','amapiano','soul-funk-disco'
-])
-
 export default function SoundSystem() {
-  const [active, setActive]           = useState(null)
-  const [activeChannel, setActiveChannel] = useState(-1) // WASM active channel index
-  const [isPlaying, setIsPlaying]     = useState(false)
-  const [loadingAudio, setLoadingAudio] = useState(false)
-  const [bass, setBass]               = useState(0)
-  const [treble, setTreble]           = useState(0)
-  const [mixMode, setMixMode]         = useState('radio')
-  const [shadyInput, setShadyInput]   = useState('')
-  const [shadyReply, setShadyReply]   = useState('')
-  const [shadyBusy, setShadyBusy]     = useState(false)
-  const [shadyWords, setShadyWords]   = useState([])
-  const [particleBurst, setParticleBurst] = useState(null)
-  const [mouthOpen, setMouthOpen]     = useState(0)
-  const [cameraOn, setCameraOn]       = useState(false)
-  const [gridMode, setGridMode]       = useState(false)
-  const [openBox, setOpenBox]         = useState(null)
-  const [fxMode, setFxMode]           = useState(false)
-  const [chatOpen, setChatOpen]       = useState(false)
-  const [crossfadeProgress, setCrossfadeProgress] = useState(0) // meter[18]
-  const [activeBpm, setActiveBpm]     = useState(120) // meter[19]
-  const [pendingChannel, setPendingChannel] = useState(-1) // meter[17]
-  const [channelData, setChannelData] = useState(Array(16).fill({
-    bpm: 0,
-    bpmLocked: false,
-    keyLabel: null,
-    phrasePhase: 0
-  }))
+  const [active, setActive]         = useState(null)   // slug of playing genre
+  const [loading, setLoading]       = useState(false)
+  const [error, setError]           = useState(null)
+  const [activeBpm, setActiveBpm]   = useState(0)
+  const [crossfade, setCrossfade]   = useState(0)
+  const [gridOpen, setGridOpen]     = useState(false)
+  const [channelRms, setChannelRms] = useState(Array(16).fill(0))
 
-  // Pro mixer panel state
-  const [proOpen, setProOpen]       = useState(false)
-  const [channelGains, setChannelGains] = useState(Array(16).fill(0))
-  const [channelEQs, setChannelEQs] = useState(
-    Array(16).fill(null).map(() => ({ low: 0, mid: 0, high: 0 }))
-  )
+  // Track which channel index is currently active in WASM
+  const activeChRef = useRef(-1)
 
-  // PWA install prompt
-  const [installPrompt, setInstallPrompt] = useState(null)
-
-  // Show clock state
-  const [setDuration, setSetDuration] = useState(0)
-  const showStartRef = useRef(null)
-  const clockTimerRef = useRef(null)
-
-  // Shady history state
-  const [shadyHistory, setShadyHistory] = useState([])
-
-  // VU meter refs
-  const vuCanvasRef = useRef(null)
-  const vuRafRef = useRef(0)
-
-  const wsRef           = useRef(null)
-  const mouthRafRef     = useRef(0)
-  const canvasAreaRef   = useRef(null)
-  const audioRef        = useRef(null)
-  const audioCtxRef     = useRef(null)
-  const audioRafRef     = useRef(0)
-  const isPlayingRef    = useRef(false)
-
-  // Diagnostic overlay
-  const [diagOpen, setDiagOpen]   = useState(false)
-  const logoTapRef                = useRef(0)
-  const lastMetersRef             = useRef(Array(20).fill(0))
-  const [lastMeters, setLastMeters] = useState(Array(20).fill(0))
-
-  // Shadow channel pre-loading for automix
-  const [shadowChannels, setShadowChannels] = useState([])
-  const shadowLoadingRef = useRef(false)
-  const shadowChannelsRef = useRef([])
-
-  // Stream retry recovery
-  const retryCountRef = useRef(Array(16).fill(0))
-
-  // Autonomous Shady commentary refs
-  const prevActiveChannelRef = useRef(-1)
-  const autoShadyTimerRef    = useRef(null)
-  const lastAutoShadyRef     = useRef(0)
-
-  // sync ref on every render — no stale closure in RAF loops
-  isPlayingRef.current = isPlaying
-
-  // sync shadowChannelsRef so meter callback has fresh access
-  useEffect(() => { shadowChannelsRef.current = shadowChannels }, [shadowChannels])
-
-  // ── audio manager setup + meter bridge ─────────────────────────────
+  // Set up meter callback once
   useEffect(() => {
-    // Debug refs to track state changes
-    const prevBpmRef = useRef(0)
-    const prevCrossfadeRef = useRef(0)
-    const crossfadeStartedRef = useRef(false)
-
-    // Set up meter callback from WASM engine
     audioManager.onMeterUpdate((meters) => {
-      // Store raw meter array for diagnostic panel
-      setLastMeters([...meters])
-
-      // meters[0-15] = channel RMS, [16] = active_channel, [17] = pending_channel
-      // [18] = crossfade_progress, [19] = active_bpm
-      const activeCh = Math.round(meters[16]);
-      const pendingCh = Math.round(meters[17]);
-      const crossfadeProgress = meters[18];
-      const activeBpm = meters[19];
-
-      setActiveChannel(activeCh);
-      setPendingChannel(pendingCh);
-      setCrossfadeProgress(crossfadeProgress);
-      setActiveBpm(activeBpm);
-
-      // Debug: BPM lock detection
-      if (activeBpm > 0 && prevBpmRef.current === 0 && activeCh >= 0) {
-        console.log(`[SF] BPM LOCKED on CH${activeCh}: ${activeBpm.toFixed(1)} BPM`)
-      }
-      prevBpmRef.current = activeBpm
-
-      // Debug: Crossfade detection
-      if (crossfadeProgress > 0 && !crossfadeStartedRef.current) {
-        console.log(`[SF] CROSSFADE START: ${activeCh} → ${pendingCh} (${activeBpm.toFixed(1)} BPM)`)
-        crossfadeStartedRef.current = true
-      } else if (crossfadeProgress === 0 && crossfadeStartedRef.current) {
-        console.log(`[SF] CROSSFADE COMPLETE: ${activeCh} is now active`)
-        crossfadeStartedRef.current = false
-      }
-
-      // Set bass from active channel's RMS (meter[activeCh])
-      if (activeCh >= 0 && activeCh < 16) {
-        setBass(meters[activeCh]);
-        // treble proxy: active channel RMS peaks drive high-freq shimmer
-        setTreble(meters[activeCh] * 2.5);
-      }
-
-      // Update per-channel data (BPM will be tracked per channel from WASM in future)
-      // For now, we only know active channel BPM
-      setChannelData(prev => {
-        const next = [...prev];
-        // Update active channel with known data
-        if (activeCh >= 0 && activeCh < 16) {
-          next[activeCh] = {
-            ...next[activeCh],
-            bpm: activeBpm,
-            bpmLocked: activeBpm > 0, // Locked if we have a valid BPM
-            phrasePhase: crossfadeProgress > 0 ? crossfadeProgress : 0 // Use crossfade progress as proxy for now
-          };
-        }
-        return next;
-      });
-
-      // Detect active channel change (crossfade completed)
-      const prevCh = prevActiveChannelRef.current
-      if (activeCh !== prevCh && prevCh !== -1 && activeCh >= 0) {
-        prevActiveChannelRef.current = activeCh
-
-        // If the new active channel was a shadow, bring it to full volume
-        // and silence the old primary
-        if (shadowChannelsRef.current.includes(activeCh)) {
-          audioManager.setChannelVolume(activeCh, 1.0)
-          audioManager.setChannelVolume(prevCh, 0.0)
-          setActive(GENRES[activeCh]?.slug || null)
-          setShadowChannels(prev => {
-            const next = prev.filter(i => i !== activeCh)
-            if (!next.includes(prevCh)) next.push(prevCh)
-            return next
-          })
-          // Load a new shadow to replace the one that just became primary
-          setTimeout(() => loadShadowChannels(GENRES[activeCh]?.slug), 3000)
-        }
-
-        setTimeout(() => autoShady('crossfade'), 800)
-      } else if (prevCh === -1 && activeCh >= 0) {
-        prevActiveChannelRef.current = activeCh
-      }
-    });
-
-    return () => {
-      audioManager.destroy();
-    };
-  }, []);
-
-  // ── stream error recovery handlers ──────────────────────────────────
-  useEffect(() => {
-    for (let i = 0; i < 16; i++) {
-      audioManager.onChannelError(i, async (channelIndex) => {
-        const slug = GENRES[channelIndex]?.slug
-        if (!slug) return
-        const retries = retryCountRef.current[channelIndex]
-        if (retries >= 3) {
-          // Give up after 3 attempts — stop the channel
-          console.error(`Channel ${channelIndex} failed 3 times, stopping`)
-          audioManager.stop(channelIndex)
-          if (active === slug) {
-            setActive(null)
-            setIsPlaying(false)
-          }
-          retryCountRef.current[channelIndex] = 0
-          return
-        }
-        retryCountRef.current[channelIndex] = retries + 1
-        console.log(`Retrying channel ${channelIndex} (attempt ${retries + 1})`)
-        // Wait 1.5s then try a fresh stream URL
-        await new Promise(r => setTimeout(r, 1500))
-        try {
-          const r2 = await fetchR2Track(slug)
-          let url = r2.url
-          let meta = r2.meta
-          if (!url) url = await fetchStreamUrls(slug)
-          if (url) audioManager.play(channelIndex, url, meta)
-        } catch (e) {
-          console.error('Retry failed:', e)
-        }
-      })
-    }
+      setChannelRms(meters.slice(0, 16))
+      setActiveBpm(meters[19] || 0)
+      setCrossfade(meters[18] || 0)
+      activeChRef.current = Math.round(meters[16])
+    })
+    return () => { audioManager.onMeterUpdate(null) }
   }, [])
 
-  // ── VU meter animation loop ───────────────────────────────────────
-  useEffect(() => {
-    const canvas = vuCanvasRef.current;
-    if (!canvas) return;
+  // ── tap a genre button ────────────────────────────────────────────────────
+  async function tapGenre(slug) {
+    const idx = GENRES.findIndex(g => g.slug === slug)
+    if (idx < 0) return
 
-    const ctx = canvas.getContext('2d');
-    const barWidth = 6;
-    const gap = 4;
-    const height = 36;
-
-    // Set canvas size
-    canvas.width = barWidth * 2 + gap;
-    canvas.height = height;
-
-    function drawVU() {
-      const [rmsL, rmsR] = audioManager.getMasterRMS();
-
-      // Clear
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Draw left channel
-      const hL = Math.min(height, rmsL * height * 2); // Scale up for visibility
-      drawBar(ctx, 0, height - hL, barWidth, hL, rmsL);
-
-      // Draw right channel
-      const hR = Math.min(height, rmsR * height * 2);
-      drawBar(ctx, barWidth + gap, height - hR, barWidth, hR, rmsR);
-
-      vuRafRef.current = requestAnimationFrame(drawVU);
-    }
-
-    function drawBar(ctx, x, y, w, h, level) {
-      // Gradient: green (0-0.7) → yellow (0.7-0.9) → red (0.9+)
-      let color;
-      if (level < 0.7) {
-        color = '#22c55e'; // green
-      } else if (level < 0.9) {
-        color = '#eab308'; // yellow
-      } else {
-        color = '#ef4444'; // red
-      }
-
-      // Draw bar
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y, w, h);
-
-      // Draw peak indicator line
-      const peakY = y;
-      ctx.fillStyle = 'rgba(255,255,255,0.3)';
-      ctx.fillRect(x, peakY, w, 1);
-    }
-
-    vuRafRef.current = requestAnimationFrame(drawVU);
-
-    return () => {
-      cancelAnimationFrame(vuRafRef.current);
-    };
-  }, []);
-
-  // ── DSP mode presets (EQ + compression) ─────────────────────────
-  useEffect(() => {
-    if (!audioManager.wasmReady) return
-
-    const PRESETS = {
-      radio: { low: 0,    mid: 0,   high: 0,   threshold: -18, ratio: 4   },
-      club:  { low: 3.5,  mid: 0,   high: 2,   threshold: -12, ratio: 6   },
-      vocal: { low: -1.5, mid: 2.5, high: 0.5, threshold: -24, ratio: 2   },
-      skit:  { low: -3,   mid: 3,   high: 1,   threshold: -28, ratio: 1.5 },
-    }
-
-    const p = PRESETS[mixMode] || PRESETS.radio
-    for (let i = 0; i < 16; i++) {
-      audioManager.setChannelEQ(i, p.low, p.mid, p.high)
-      audioManager.setChannelCompression(i, p.threshold, p.ratio)
-    }
-  }, [mixMode])
-
-  // ── 4-minute ambient Shady commentary timer ────────────────────────
-  useEffect(() => {
-    if (!isPlaying) {
-      clearInterval(autoShadyTimerRef.current)
+    // If this genre is already playing, stop it
+    if (active === slug) {
+      audioManager.stop(idx)
+      setActive(null)
       return
     }
-    autoShadyTimerRef.current = setInterval(() => {
-      autoShady('ambient')
-    }, 4 * 60 * 1000)  // every 4 minutes
 
-    return () => clearInterval(autoShadyTimerRef.current)
-  }, [isPlaying, active, activeBpm])
-
-  // ── show clock (set duration) ───────────────────────────────────────
-  useEffect(() => {
-    if (isPlaying) {
-      clockTimerRef.current = setInterval(() => {
-        if (showStartRef.current) {
-          const newDuration = Math.floor((Date.now() - showStartRef.current) / 1000)
-          setSetDuration(newDuration)
-          // Update Media Session position state for CarPlay progress bar
-          if ('mediaSession' in navigator && navigator.mediaSession.setPositionState) {
-            try {
-              navigator.mediaSession.setPositionState({
-                duration: Math.max(newDuration + 3600, newDuration + 60),
-                playbackRate: 1,
-                position: newDuration
-              })
-            } catch {}
-          }
-        }
-      }, 1000)
-    } else {
-      clearInterval(clockTimerRef.current)
-    }
-    return () => clearInterval(clockTimerRef.current)
-  }, [isPlaying])
-
-  // ── Media Session metadata for CarPlay ────────────────────────────────────
-  useEffect(() => {
-    const genreName = GENRES.find(g => g.slug === active)?.name || 'Shady Radio'
-    updateMediaSession(genreName, activeBpm, isPlaying)
-  }, [active, activeBpm, isPlaying])
-
-  // ── Media Session action handlers (CarPlay controls) ───────────────────────
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return
-
-    navigator.mediaSession.setActionHandler('play', () => {
-      if (!isPlayingRef.current) togglePlay()
-    })
-    navigator.mediaSession.setActionHandler('pause', () => {
-      if (isPlayingRef.current) togglePlay()
-    })
-    navigator.mediaSession.setActionHandler('stop', () => {
-      skipStop()
-    })
-    navigator.mediaSession.setActionHandler('nexttrack', () => {
-      const cur = GENRES.findIndex(g => g.slug === active)
-      const next = GENRES[(cur + 1) % GENRES.length]
-      tapGenre(next.slug)
-    })
-    navigator.mediaSession.setActionHandler('previoustrack', () => {
-      const cur = GENRES.findIndex(g => g.slug === active)
-      const prev = GENRES[(cur - 1 + GENRES.length) % GENRES.length]
-      tapGenre(prev.slug)
-    })
-
-    return () => {
-      ['play','pause','stop','nexttrack','previoustrack'].forEach(action => {
-        try { navigator.mediaSession.setActionHandler(action, null) } catch {}
-      })
-    }
-  }, [])
-
-  // ── keyboard shortcuts ────────────────────────────────────────────────────
-  useEffect(() => {
-    function onKey(e) {
-      // Never intercept when user is typing
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
-      if (e.metaKey || e.ctrlKey || e.altKey) return
-
-      switch (e.key) {
-        case ' ':
-          e.preventDefault()
-          togglePlay()
-          break
-        case 'Escape':
-          skipStop()
-          break
-        case 's':
-        case 'S':
-          activateSkit()
-          break
-        case 'p':
-        case 'P':
-          setProOpen(v => !v)
-          break
-        case 'f':
-        case 'F': {
-          const next = !fxMode
-          setFxMode(next)
-          if (next) audioManager.enableFX(0.35)
-          else audioManager.disableFX()
-          break
-        }
-        case 'ArrowRight': {
-          e.preventDefault()
-          // Advance to next genre
-          const cur = GENRES.findIndex(g => g.slug === active)
-          const next = GENRES[(cur + 1) % GENRES.length]
-          tapGenre(next.slug)
-          break
-        }
-        case 'ArrowLeft': {
-          e.preventDefault()
-          // Back to previous genre
-          const cur = GENRES.findIndex(g => g.slug === active)
-          const prev = GENRES[(cur - 1 + GENRES.length) % GENRES.length]
-          tapGenre(prev.slug)
-          break
-        }
-        default:
-          // Number keys 1-9 → genres 0-8, 0 → genre 9
-          if (e.key >= '1' && e.key <= '9') {
-            const idx = parseInt(e.key) - 1
-            if (GENRES[idx]) tapGenre(GENRES[idx].slug)
-          } else if (e.key === '0') {
-            if (GENRES[9]) tapGenre(GENRES[9].slug)
-          }
-      }
+    // Stop whatever was playing
+    if (active !== null) {
+      const prevIdx = GENRES.findIndex(g => g.slug === active)
+      if (prevIdx >= 0) audioManager.stop(prevIdx)
     }
 
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [active, isPlaying, fxMode, proOpen])
-
-  // ── PWA install prompt ────────────────────────────────────────────────────
-  useEffect(() => {
-    function onInstallPrompt(e) {
-      e.preventDefault()
-      setInstallPrompt(e)
-    }
-    window.addEventListener('beforeinstallprompt', onInstallPrompt)
-    return () => window.removeEventListener('beforeinstallprompt', onInstallPrompt)
-  }, [])
-
-  // ── audio engine ─────────────────────────────────────────────────────────
-
-  async function fetchR2Track(slug) {
-    const base = import.meta.env.VITE_R2_BASE_URL || ''
-    if (!base) return { url: null, meta: null }
-    try {
-      const res = await fetch(`${base}/api/random?genre=${encodeURIComponent(slug)}`)
-      if (!res.ok) return { url: null, meta: null }
-      const data = await res.json()
-      const meta = data.bpm || data.camelot ? {
-        bpm: data.bpm,
-        camelot: data.camelot,
-        energy: data.energy,
-        title: data.title,
-        artist: data.artist
-      } : null
-      return { url: data.url || null, meta }
-    } catch {
-      return { url: null, meta: null }
-    }
-  }
-
-  async function fetchStreamUrls(slug) {
-    const tag = GENRE_TAGS[slug] || slug
-    const res = await fetch(
-      `https://de1.api.radio-browser.info/json/stations/bytag/${encodeURIComponent(tag)}?limit=5&hidebroken=true&order=clickcount&reverse=true`
-    )
-    const stations = await res.json()
-    const station = stations.find(s => s.url_resolved) || stations[0]
-    return station?.url_resolved || null
-  }
-
-  // Pick 2 shadow genres: one similar (adjacent), one contrast (far in list)
-  function pickShadowGenres(activeSlug) {
-    const activeIdx = GENRES.findIndex(g => g.slug === activeSlug)
-    const similar   = GENRES[(activeIdx + 2) % GENRES.length]
-    const contrast  = GENRES[(activeIdx + 8) % GENRES.length]
-    return [similar.slug, contrast.slug]
-  }
-
-  // Load shadow channels silently for automix
-  async function loadShadowChannels(activeSlug) {
-    if (shadowLoadingRef.current) return
-    shadowLoadingRef.current = true
-
-    const slugs = pickShadowGenres(activeSlug)
-    const newShadows = []
-
-    for (const slug of slugs) {
-      const idx = GENRES.findIndex(g => g.slug === slug)
-      if (idx < 0) continue
-      try {
-        const r2 = await fetchR2Track(slug)
-        let url = r2.url
-        let meta = r2.meta
-        if (!url) url = await fetchStreamUrls(slug)
-        if (!url) continue
-
-        // Play at volume 0 — silent to user, active in WASM
-        // Use onReady callback to set volume AFTER audio is actually playing
-        audioManager.play(idx, url, meta, (channelIdx) => {
-          audioManager.setChannelVolume(channelIdx, 0.0)
-        })
-        newShadows.push(idx)
-      } catch (e) {
-        console.warn('Shadow load failed for', slug, e)
-      }
-    }
-
-    setShadowChannels(newShadows)
-    shadowLoadingRef.current = false
-  }
-
-  function stopShadowChannels() {
-    shadowChannels.forEach(idx => audioManager.stop(idx))
-    setShadowChannels([])
-  }
-
-  async function playGenre(slug, channelIndex) {
-    setLoadingAudio(true)
-
-    // Initialize audio manager on first play (needs user gesture)
-    if (!audioManager.audioContext) {
-      await audioManager.initialize();
-    }
+    setLoading(true)
+    setError(null)
 
     try {
-      const r2 = await fetchR2Track(slug)   // Try R2 first
-      let url = r2.url
-      let meta = r2.meta
-      if (!url) url = await fetchStreamUrls(slug)   // Radio Browser fallback
-      if (url) {
-        audioManager.play(channelIndex, url, meta)
-        // Store metadata for display (key badge)
-        if (meta?.camelot) {
-          setChannelData(prev => {
-            const next = [...prev]
-            next[channelIndex] = { ...next[channelIndex], keyLabel: meta.camelot }
-            return next
-          })
-        }
-      }
+      await audioManager.initialize()
+
+      // Fetch playlist from audio-server
+      const res = await fetch(`/api/playlist/${slug}`)
+      if (!res.ok) throw new Error(`Playlist fetch failed (${res.status})`)
+      const tracks = await res.json()
+      if (!tracks || tracks.length === 0) throw new Error('No tracks in playlist')
+
+      // Pick a random track
+      const track = tracks[Math.floor(Math.random() * tracks.length)]
+
+      // Fetch + decode the audio
+      const buffer = await audioManager.fetchDecode(track.url)
+
+      // Set master BPM to this track's BPM
+      audioManager.setMasterBpm(track.bpm)
+
+      // Play it — start at bar 1 (gridOffsetSec)
+      audioManager.playBuffer(idx, buffer, null, track.gridOffsetSec || 0, track.bpm)
+
+      setActive(slug)
     } catch (e) {
-      console.error('playGenre failed:', e)
-      // Show error to user
-      setShadyReply(`Stream failed: ${e.message}`)
-      setIsPlaying(false)
-    }
-    setLoadingAudio(false)
-  }
-
-  // ── genre tap ─────────────────────────────────────────────────────────────
-  function tapGenre(slug) {
-    const channelIndex = GENRES.findIndex(g => g.slug === slug);
-    if (channelIndex < 0) return;
-
-    if (active === slug) {
-      // Stop this channel
-      audioManager.stop(channelIndex);
-      setActive(null);
-      setIsPlaying(false);
-      // Stop shadow channels too
-      stopShadowChannels()
-    } else {
-      // Stop any currently playing channel
-      if (active) {
-        const prevChannel = GENRES.findIndex(g => g.slug === active);
-        if (prevChannel >= 0) {
-          audioManager.stop(prevChannel);
-        }
-      }
-      // Start new channel
-      setActive(slug);
-      setIsPlaying(true);
-
-      // Initialize show clock on first play
-      if (!showStartRef.current) {
-        showStartRef.current = Date.now()
-        setTimeout(() => autoShady('intro'), 3000)  // 3s after first drop
-      }
-
-      playGenre(slug, channelIndex);
-
-      // Reset retry count on successful play
-      retryCountRef.current[channelIndex] = 0
-
-      // Set the primary channel to full volume
-      audioManager.setChannelVolume(channelIndex, 1.0)
-
-      // Load shadow channels 2 seconds after primary starts
-      setTimeout(() => loadShadowChannels(slug), 2000)
+      console.error('[SoundSystem] tapGenre error:', e)
+      setError(e.message)
+    } finally {
+      setLoading(false)
     }
   }
 
-  // ── PWA install handler ───────────────────────────────────────────────────
-  async function handleInstall() {
-    if (!installPrompt) return
-    installPrompt.prompt()
-    const { outcome } = await installPrompt.userChoice
-    if (outcome === 'accepted') setInstallPrompt(null)
-  }
-
-  // ── play / pause ──────────────────────────────────────────────────────────
-  function togglePlay() {
-    if (isPlaying) {
-      if (active) {
-        const ch = GENRES.findIndex(g => g.slug === active)
-        if (ch >= 0) audioManager.stop(ch)
-      }
-      setIsPlaying(false)
-    } else {
-      if (active) {
-        const ch = GENRES.findIndex(g => g.slug === active)
-        if (ch >= 0) { setIsPlaying(true); playGenre(active, ch) }
-      }
-    }
-  }
-
-  // ── skip / stop ───────────────────────────────────────────────────────────
-  function skipStop() {
-    stopShadowChannels()
-    if (active) {
-      const ch = GENRES.findIndex(g => g.slug === active)
-      if (ch >= 0) audioManager.stop(ch)
+  // ── stop all ──────────────────────────────────────────────────────────────
+  function stopAll() {
+    if (active !== null) {
+      const idx = GENRES.findIndex(g => g.slug === active)
+      if (idx >= 0) audioManager.stop(idx)
     }
     setActive(null)
-    setIsPlaying(false)
   }
 
-  // ── skit mode — auto-prompt Shady ─────────────────────────────────────────
-  function activateSkit() {
-    const wasAlreadySkit = mixMode === 'skit'
-    setMixMode(wasAlreadySkit ? 'radio' : 'skit')
-    if (!wasAlreadySkit && !shadyBusy) {
-      setShadyInput('Give us a skit right now — something fierce')
-      setTimeout(() => sendToShady('Give us a skit right now — something fierce'), 100)
-    }
+  if (gridOpen) {
+    return <GridTool onClose={() => setGridOpen(false)} />
   }
-
-  // ── share via Web Share API (Apple Messages / AirDrop) ─────────────────────
-  async function shareNow() {
-    if (!navigator.share) return
-    const genre = GENRES.find(g => g.slug === active)
-    const genreName = genre?.name || 'the mix'
-    const bpmText = activeBpm > 0 ? ` @ ${Math.round(activeBpm)} BPM` : ''
-    const shadyLine = shadyReply && shadyReply !== '...'
-      ? `\n\n"${shadyReply}" — Shady`
-      : ''
-    try {
-      await navigator.share({
-        title: 'Shady Radio',
-        text: `Listening to ${genreName}${bpmText} on Shady Radio${shadyLine}`,
-        url: window.location.href,
-      })
-    } catch (e) {
-      // User cancelled share or API not available — non-fatal
-    }
-  }
-
-  // ── Shady chat ────────────────────────────────────────────────────────────
-  async function sendToShady(overrideText) {
-    const text = (typeof overrideText === 'string' ? overrideText : shadyInput).trim()
-    if (!text || shadyBusy) return
-    setShadyBusy(true); setShadyInput(''); setShadyReply('...')
-    try {
-      const SHADY_BASE = import.meta.env.VITE_SHADY_URL || ''
-      const res = await fetch(`${SHADY_BASE}/api/shady`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
-      })
-      const { reply } = await res.json()
-      if (!reply || reply.trim() === '.') { setShadyReply(''); return }
-      setShadyReply(reply)
-
-      // Add to Shady history (keep last 3)
-      setShadyHistory(prev => {
-        const next = [...prev, { text: reply, ts: Date.now() }]
-        return next.slice(-3)
-      })
-
-      const words = reply.split(' ')
-      const wordAnimations = words.map((word, index) => {
-        const w = word.toUpperCase().replace(/[^A-Z]/g, '')
-        return {
-          text: word,
-          type: ['GIRL','HONEY','BITCH','QUEEN'].includes(w) ? 'fire' :
-                ['PERIOD','ICONIC','LEGENDARY','FIRE'].includes(w) ? 'snap' :
-                word.includes('*') || word.includes('_') ? 'shade' : 'regular',
-          delay: index * 200,
-          x: Math.random() * 60 + 20,
-          y: Math.random() * 40 + 30
-        }
-      })
-      setShadyWords(wordAnimations)
-
-      if (wordAnimations.some(w => w.type === 'snap')) {
-        setParticleBurst({ x: Math.random() * 100, y: Math.random() * 100 })
-        setTimeout(() => setParticleBurst(null), 1000)
-      }
-      setTimeout(() => setShadyWords([]), 3000)
-
-      // duck music while Shady speaks
-      if (audioRef.current) audioRef.current.volume = 0.18
-
-      const speakRes = await fetch(`${SHADY_BASE}/api/synthesize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: reply }),
-      })
-      if (speakRes.ok) {
-        const blob  = await speakRes.blob()
-        const url   = URL.createObjectURL(blob)
-        const audio = new Audio(url)
-
-        try {
-          const actx = audioManager.getContext()
-          if (!actx) throw new Error('no audio context')
-          if (actx.state === 'suspended') await actx.resume()
-          const src      = actx.createMediaElementSource(audio)
-          const analyser = actx.createAnalyser()
-          analyser.fftSize = 256
-          src.connect(analyser); analyser.connect(actx.destination)
-          const buf = new Uint8Array(analyser.frequencyBinCount)
-          cancelAnimationFrame(mouthRafRef.current)
-          const tick = () => {
-            analyser.getByteTimeDomainData(buf)
-            let rms = 0
-            for (let i = 0; i < buf.length; i++) rms += (buf[i] - 128) ** 2
-            setMouthOpen(Math.min(1, Math.sqrt(rms / buf.length) / 12))
-            mouthRafRef.current = requestAnimationFrame(tick)
-          }
-          tick()
-        } catch {}
-
-        await audio.play()
-        audio.onended = () => {
-          URL.revokeObjectURL(url)
-          cancelAnimationFrame(mouthRafRef.current)
-          setMouthOpen(0)
-          if (audioRef.current) audioRef.current.volume = 1.0
-        }
-      }
-    } catch { setShadyReply('') }
-    finally { setShadyBusy(false) }
-  }
-
-  // ── Autonomous Shady commentary helpers ─────────────────────────────
-  function buildShadyContext(trigger) {
-    const genre = active ? GENRES.find(g => g.slug === active)?.name || active : 'the mix'
-    const bpmStr = activeBpm > 0 ? `${Math.round(activeBpm)} BPM` : ''
-    const setTime = setDuration > 0 ? formatDuration(setDuration) : null
-    const setPhase = !setTime ? 'opening' :
-                     setDuration < 600 ? 'first ten minutes' :
-                     setDuration < 1800 ? 'mid-set' :
-                     setDuration < 3600 ? 'deep in the set' : 'marathon set territory'
-    const energy = activeBpm > 135 ? 'peak energy' :
-                   activeBpm > 122 ? 'building' :
-                   activeBpm > 110 ? 'warm' : 'slow burn'
-
-    const base = [
-      genre && `Genre: ${genre}`,
-      bpmStr && `BPM: ${bpmStr}`,
-      `Energy: ${energy}`,
-      setTime && `Set time: ${setTime} (${setPhase})`,
-    ].filter(Boolean).join(' | ')
-
-    if (trigger === 'intro') {
-      return `[DJ set opening] You just started spinning. Genre: ${genre}. ` +
-             `The doors just opened, the floor is still filling in. ` +
-             `Give a fierce welcome — two sentences max. In character. No hashtags.`
-    }
-    if (trigger === 'crossfade') {
-      return `[DJ crossfade] ${base}. ` +
-             `You just dropped into a new track. Short fierce transition drop — ` +
-             `one sentence. Stay in character.`
-    }
-    if (trigger === 'ambient') {
-      return `[DJ ambient commentary] ${base}. ` +
-             `The crowd is locked in. Say something iconic — one sentence, right now. No hashtags.`
-    }
-    return `[DJ] ${base}. Say something.`
-  }
-
-  // Format duration as MM:SS or H:MM:SS
-  function formatDuration(secs) {
-    const h = Math.floor(secs / 3600)
-    const m = Math.floor((secs % 3600) / 60)
-    const s = secs % 60
-    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
-    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
-  }
-
-  async function autoShady(trigger) {
-    if (shadyBusy || !isPlaying) return
-    const now = Date.now()
-    if (now - lastAutoShadyRef.current < 30000) return  // 30s minimum between auto lines
-    lastAutoShadyRef.current = now
-    const prompt = buildShadyContext(trigger)
-    sendToShady(prompt)
-  }
-
-  // ── Pro panel handlers ───────────────────────────────────────────────
-  function handleGainChange(idx, db) {
-    setChannelGains(prev => { const n = [...prev]; n[idx] = db; return n })
-    const linear = Math.pow(10, db / 20)
-    audioManager.setChannelGain(idx, linear)
-  }
-
-  function handleEQChange(idx, eq) {
-    setChannelEQs(prev => { const n = [...prev]; n[idx] = eq; return n })
-    audioManager.setChannelEQ(idx, eq.low, eq.mid, eq.high)
-  }
-
-  // vocal mode dims non-vocal genres
-  const visibleGenres = GENRES.map(g => ({
-    ...g,
-    dimmed: mixMode === 'vocal' && !VOCAL_SLUGS.has(g.slug)
-  }))
 
   return (
     <div className="ss-root">
-
-      {/* ── header ── */}
-      <header className="ss-header">
+      {/* Header */}
+      <div className="ss-header">
         <div className="ss-logo">
-          <img src="/sf-logo.jpeg" alt="SF" className="ss-logo-img"
-            onClick={() => {
-              if (!import.meta.env.DEV) return
-              logoTapRef.current++
-              if (logoTapRef.current >= 5) {
-                logoTapRef.current = 0
-                setDiagOpen(v => !v)
-              }
-            }}/>
-          <span className="ss-logo-text">SF</span>
+          <img src="/sf-logo.jpeg" alt="SF" className="ss-logo-img" />
+          <span className="ss-logo-text">SHADY RADIO</span>
         </div>
-        <p className="ss-header-title">· SOUNDFACTORY ·</p>
-        {installPrompt && (
-          <button className="ss-install-btn" onClick={handleInstall} title="Add to Home Screen">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" strokeWidth="2">
-              <path d="M12 2v13M7 10l5 5 5-5"/>
-              <path d="M3 19h18"/>
-            </svg>
-          </button>
-        )}
-        <button className={`ss-cam-btn ${cameraOn ? 'ss-cam-btn--on' : ''}`}
-          onClick={() => setCameraOn(v => !v)} title="Camera">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-            <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-          </svg>
-        </button>
-      </header>
 
-      {/* ── canvas ── */}
-      <div className="ss-canvas" ref={canvasAreaRef}>
-        {cameraOn && <SFCamera active={cameraOn} onMotion={() => {}} />}
-
-        <div className="ss-hero-layer">
-          {/* Spectrum behind everything */}
-          <SFSpectrum isPlaying={isPlaying} />
-
-          {/* Now playing strip — top of hero */}
-          {active && (
-            <div className="ss-now-playing">
-              <span className="ss-np-dot" />
-              <span className="ss-np-genre">
-                {GENRES.find(g => g.slug === active)?.name?.toUpperCase() || active.toUpperCase()}
-              </span>
-              {activeBpm > 0 && (
-                <span className="ss-np-bpm">{Math.round(activeBpm)} BPM</span>
-              )}
-              {setDuration > 0 && (
-                <span className="ss-np-clock">{formatDuration(setDuration)}</span>
-              )}
-            </div>
-          )}
-
-          {/* Shady history strip */}
-          {shadyHistory.length > 0 && (
-            <div className="ss-shady-history">
-              {shadyHistory.map((line, i) => (
-                <div key={line.ts}
-                  className="ss-shady-history-line"
-                  style={{ opacity: 0.25 + (i / shadyHistory.length) * 0.65 }}>
-                  {line.text}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* BPM + crossfade */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {activeBpm > 0 && (
-            <div className="ss-hero-bpm">
-              <span className="ss-hero-bpm-number">{Math.round(activeBpm)}</span>
-              <span className="ss-hero-bpm-label">BPM</span>
-              {crossfadeProgress > 0 && crossfadeProgress < 1 && (
-                <div className="ss-hero-xfade">
-                  <div
-                    className="ss-hero-xfade-fill"
-                    style={{ width: `${crossfadeProgress * 100}%` }}
-                  />
-                </div>
+            <span style={{ fontSize: '0.75rem', color: 'rgba(212,166,79,0.9)', fontWeight: 700, letterSpacing: '0.05em' }}>
+              {Math.round(activeBpm)} BPM
+              {crossfade > 0 && crossfade < 1 && (
+                <span style={{ marginLeft: '0.4rem', color: 'rgba(255,100,50,0.9)' }}>
+                  XFADE {Math.round(crossfade * 100)}%
+                </span>
               )}
-            </div>
+            </span>
           )}
-        </div>
-
-        <div className="ss-particle-layer">
-          <SFParticleField
-            bass={bass}
-            treble={treble}
-            isPlaying={isPlaying}
-            morphToLips={shadyBusy || mixMode === 'skit'}
-            mouthOpen={mouthOpen}
-          />
-        </div>
-
-        <ShadyStage reply={shadyReply} isActive={shadyBusy || !!shadyReply} stageRef={canvasAreaRef} />
-        <ShadyProps isActive={shadyBusy || !!shadyReply} />
-
-        {/* loading indicator */}
-        {loadingAudio && (
-          <div className="ss-loading">
-            <span>Tuning in…</span>
-          </div>
-        )}
-
-        <div className="ss-grid">
-          {visibleGenres.map((g, i) => (
-            <SpeakerCell
-              key={g.slug}
-              genre={g}
-              idx={i}
-              active={active === g.slug}
-              activeChannel={activeChannel}
-              bass={isPlaying ? bass : 0}
-              bandBass={isPlaying ? bass : 0}
-              treble={isPlaying ? treble : 0}
-              isPlaying={isPlaying}
-              fxMode={fxMode}
-              dimmed={g.dimmed}
-              crossfadeProgress={activeChannel === i ? crossfadeProgress : 0}
-              bpm={channelData[i].bpm}
-              bpmLocked={channelData[i].bpmLocked}
-              keyLabel={channelData[i].keyLabel}
-              phrasePhase={channelData[i].phrasePhase}
-              pending={pendingChannel === i && crossfadeProgress > 0 && crossfadeProgress < 1}
-              shadow={shadowChannels.includes(i)}
-              onTap={() => !gridMode && tapGenre(g.slug)}
-            />
-          ))}
-        </div>
-
-        <div className={`ss-box-grid ${gridMode ? 'ss-box-grid--on' : ''}`}>
-          {Array.from({ length: 32 }, (_, i) => (
-            <button key={i}
-              className={`ss-box-cell ${openBox === i ? 'ss-box-cell--open' : ''}`}
-              onClick={() => setOpenBox(b => b === i ? null : i)}>
-              {openBox === i && (
-                <div className="ss-box-inner">
-                  <span className="ss-box-idx">{String(i + 1).padStart(2, '0')}</span>
-                  <span className="ss-box-hint">anything</span>
-                </div>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* ── controls ── */}
-      <div className="ss-controls">
-        <div className="ss-btn-strip">
-
-          {/* skip / stop */}
-          <button className="ss-btn" title="Stop" onClick={skipStop}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/>
-            </svg>
-          </button>
-
-          {/* play / pause */}
-          <button className={`ss-btn ss-btn--labeled ${isPlaying ? 'ss-btn--cyan' : ''}`} onClick={togglePlay}>
-            {isPlaying
-              ? <><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span>Pause</span></>
-              : <><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg><span>Play</span></>}
-          </button>
-
-          {/* skit */}
-          <button className={`ss-btn ss-btn--labeled ${mixMode === 'skit' ? 'ss-btn--orange' : ''}`}
-            onClick={activateSkit}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-            </svg>
-            <span>Skit</span>
-          </button>
-
-          {/* radio */}
-          <button className={`ss-btn ss-btn--labeled ${mixMode === 'radio' ? 'ss-btn--amber' : ''}`}
-            onClick={() => setMixMode('radio')}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 20H2"/><circle cx="12" cy="9" r="7"/><path d="M12 2C8 2 4.5 5 4.5 9"/>
-            </svg>
-            <span>Radio</span>
-          </button>
-
-          {/* club */}
-          <button className={`ss-btn ss-btn--labeled ${mixMode === 'club' ? 'ss-btn--fuchsia' : ''}`}
-            onClick={() => setMixMode(m => m === 'club' ? 'radio' : 'club')}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
-            </svg>
-            <span>Club</span>
-          </button>
-
-          {/* vocal */}
-          <button className={`ss-btn ss-btn--labeled ${mixMode === 'vocal' ? 'ss-btn--emerald' : ''}`}
-            onClick={() => setMixMode(m => m === 'vocal' ? 'radio' : 'vocal')}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="23"/>
-              <line x1="8" y1="23" x2="16" y2="23"/>
-            </svg>
-            <span>Vocal</span>
-          </button>
-
-          {/* pro */}
-          <button className={`ss-btn ss-btn--labeled ss-btn--pro ${proOpen ? 'ss-btn--pro-on' : ''}`}
-            onClick={() => setProOpen(v => !v)}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7z"/>
-            </svg>
-            <span>Pro</span>
-          </button>
-
-          {/* fx */}
-          <button className={`ss-btn ss-btn--labeled ${fxMode ? 'ss-btn--fx-on' : ''}`}
-            onClick={() => {
-              const next = !fxMode
-              setFxMode(next)
-              if (next) audioManager.enableFX(0.35)
-              else audioManager.disableFX()
-            }}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-            </svg>
-            <span>FX</span>
-          </button>
-
-          {/* zones */}
-          <button className={`ss-btn ss-btn--labeled ${gridMode ? 'ss-btn--grid-on' : ''}`}
-            onClick={() => { setGridMode(v => !v); setOpenBox(null) }}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-              <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
-            </svg>
-            <span>Zones</span>
-          </button>
-
-          {/* chat */}
-          <button className={`ss-btn ss-btn--labeled ${chatOpen ? 'ss-btn--cyan' : ''}`}
-            onClick={() => setChatOpen(v => !v)}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-            </svg>
-            <span>Chat</span>
-          </button>
-
-          {/* share (Messages / AirDrop) */}
-          {navigator.share && (
-            <button className="ss-btn ss-btn--labeled" onClick={shareNow}
-                    title="Share via Messages / AirDrop">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" strokeWidth="2">
-                <circle cx="18" cy="5" r="3"/>
-                <circle cx="6" cy="12" r="3"/>
-                <circle cx="18" cy="19" r="3"/>
-                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+          {active && (
+            <button className="ss-btn ss-btn--labeled" onClick={stopAll} style={{ pointerEvents: 'auto' }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="4" y="4" width="16" height="16"/>
               </svg>
-              <span>Share</span>
+              <span>Stop</span>
             </button>
           )}
-
-        </div>
-
-        {/* ── master VU + Shady input strip ─────────────────────────────── */}
-        <div className="ss-master-strip">
-          {/* Left: stereo VU meter */}
-          <div className="ss-vu-meter">
-            <canvas ref={vuCanvasRef} className="ss-vu-canvas" />
-          </div>
-
-          {/* Center: Shady input */}
-          <div className="ss-shady-center">
-            {shadyReply && shadyReply !== '...' && (
-              <div className="ss-shady-reply-bubble">{shadyReply}</div>
-            )}
-            <div className="ss-shady-input-wrap">
-              <input
-                type="text"
-                className="ss-shady-input"
-                placeholder="Ask Shady..."
-                value={shadyInput}
-                onChange={(e) => setShadyInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && sendToShady()}
-              />
-            </div>
-          </div>
-
-          {/* Right: Shady button */}
           <button
-            className="ss-shady-send-btn"
-            onClick={() => sendToShady()}
-            disabled={shadyBusy || !shadyInput.trim()}
+            className="ss-btn ss-btn--labeled"
+            style={{ borderColor: 'rgba(212,166,79,0.5)', color: 'rgba(212,166,79,0.9)' }}
+            onClick={() => setGridOpen(true)}
           >
-            Ask
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+            <span>Grid</span>
           </button>
         </div>
-
-        {/* ── chat panel (expandable) ── */}
-        <ChatPanel
-          isOpen={chatOpen}
-          onClose={() => setChatOpen(false)}
-          onShadyMessage={sendToShady}
-          shadyReply={shadyReply}
-        />
       </div>
 
-      {/* flying words + particle burst rendered over full screen */}
-      {shadyWords.map((word, i) => (
-        <div key={i} className={`shady-word shady-word-${word.type}`}
-          style={{ left: `${word.x}%`, top: `${word.y}%`, animationDelay: `${word.delay}ms` }}>
-          {word.text}
+      {/* Loading / error banners */}
+      {loading && (
+        <div className="ss-loading"><span>Loading…</span></div>
+      )}
+      {error && (
+        <div style={{
+          position: 'absolute', top: '3rem', left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(200,0,0,0.8)', color: '#fff', padding: '0.4rem 0.8rem',
+          borderRadius: '4px', fontSize: '0.75rem', zIndex: 50
+        }}>
+          {error}
         </div>
-      ))}
-      {particleBurst && (
-        <div className="particle-burst"
-          style={{ left: `${particleBurst.x}%`, top: `${particleBurst.y}%` }} />
       )}
 
-      {/* ── diagnostic overlay ── */}
-      {import.meta.env.DEV && diagOpen && (
-        <DiagPanel
-          meters={lastMeters}
-          activeChannel={activeChannel}
-          pendingChannel={pendingChannel}
-          crossfadeProgress={crossfadeProgress}
-          activeBpm={activeBpm}
-          shadowChannels={shadowChannels}
-          onClose={() => setDiagOpen(false)}
-        />
-      )}
-
-      {/* ── pro mixer panel ── */}
-      <ProPanel
-        isOpen={proOpen}
-        channels={GENRES}
-        channelGains={channelGains}
-        channelEQs={channelEQs}
-        activeChannel={activeChannel}
-        onGainChange={handleGainChange}
-        onEQChange={handleEQChange}
-        onClose={() => setProOpen(false)}
-      />
-
-
+      {/* 16-channel grid */}
+      <div className="ss-canvas">
+        <div className="ss-grid" style={{ paddingTop: '3.5rem' }}>
+          {GENRES.map((g, i) => {
+            const isActive = active === g.slug
+            const rms      = channelRms[i] || 0
+            const glow     = isActive ? Math.min(rms * 400, 1) : 0
+            return (
+              <button
+                key={g.slug}
+                className={`ss-speaker-cell${isActive ? ' ss-speaker-cell--active' : ''}`}
+                onClick={() => tapGenre(g.slug)}
+                style={{
+                  boxShadow: glow > 0.05
+                    ? `0 0 ${8 + glow * 24}px rgba(212,166,79,${(glow * 0.7).toFixed(2)})`
+                    : undefined,
+                  borderColor: isActive ? 'rgba(212,166,79,0.7)' : undefined,
+                }}
+              >
+                <span className="ss-cell-name">{g.name}</span>
+                {isActive && (
+                  <span className="ss-cell-playing">▶</span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
