@@ -1,6 +1,7 @@
 #include "engine.h"
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 
 namespace {
   // Constants
@@ -41,11 +42,10 @@ namespace {
     float process_sample(float input) {
       // RMS detection
       float input_sq = input * input;
-      
-      // Update envelope
-      float target_envelope = (input_sq > envelope) ? input_sq : envelope;
-      envelope = target_envelope + (envelope - target_envelope) * 
-                 ((input_sq > envelope) ? attack_coeff : release_coeff);
+
+      // Update envelope with attack/release smoothing
+      float coeff = (input_sq > envelope) ? attack_coeff : release_coeff;
+      envelope = envelope * coeff + input_sq * (1.0f - coeff);
       
       float rms_db = 10.0f * std::log10(std::max(envelope, 1e-10f));
       
@@ -110,15 +110,17 @@ namespace {
       float peak = std::fabs(delayed_sample);
       float peak_db = 20.0f * std::log10(std::max(peak, 1e-10f));
       
-      // Compute gain reduction
+      // Compute target gain reduction (brickwall: anything over threshold gets reduced to threshold)
       float over_threshold = peak_db - threshold_db;
-      float gain_reduction_db = std::max(0.0f, over_threshold);
-      
-      // Apply release smoothing
-      float current_gr_db = -20.0f * std::log10(std::max(envelope, 1e-10f));
-      float smoothed_gr_db = current_gr_db + (current_gr_db - current_gr_db) * release_coeff;
-      envelope = std::pow(10.0f, -smoothed_gr_db / 20.0f);
-      
+      float target_gr_linear = (over_threshold > 0.0f) ? std::pow(10.0f, -over_threshold / 20.0f) : 1.0f;
+
+      // Apply release smoothing (envelope follows gain reduction downward with release time)
+      if (target_gr_linear < envelope) {
+        envelope = target_gr_linear; // Instant attack when signal exceeds threshold
+      } else {
+        envelope = envelope * release_coeff + target_gr_linear * (1.0f - release_coeff); // Release smoothing
+      }
+
       // Apply gain reduction to delayed sample
       float limited_sample = delayed_sample * envelope;
       
